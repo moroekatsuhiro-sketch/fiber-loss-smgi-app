@@ -1,4 +1,4 @@
-const CACHE_NAME = "fiber-loss-smgi-offline-ocr-trial-v1";
+const CACHE_NAME = "fiber-loss-smgi-offline-ocr-fix-v2";
 
 const ASSETS = [
   "./",
@@ -6,14 +6,27 @@ const ASSETS = [
   "./style.css",
   "./app.js",
   "./manifest.json",
-  "./vendor/tesseract/README_PUT_OCR_FILES_HERE.txt",
   "./icon-192.png",
-  "./icon-512.png"
+  "./icon-512.png",
+  "./vendor/tesseract/tesseract.min.js",
+  "./vendor/tesseract/worker.min.js",
+  "./vendor/tesseract/tesseract-core.wasm.js",
+  "./vendor/tesseract/tesseract-core.wasm",
+  "./vendor/tesseract/jpn.traineddata.gz",
+  "./vendor/tesseract/eng.traineddata.gz"
 ];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
+    caches.open(CACHE_NAME).then((cache) =>
+      Promise.all(
+        ASSETS.map((asset) =>
+          cache.add(asset).catch((error) => {
+            console.warn("Cache add failed:", asset, error);
+          })
+        )
+      )
+    )
   );
   self.skipWaiting();
 });

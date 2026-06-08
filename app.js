@@ -136,6 +136,9 @@ function initButtons() {
   $("ocrSiteBtn").addEventListener("click", () => openOcrPicker("siteName"));
   $("ocrStartBtn").addEventListener("click", () => openOcrPicker("startPanel"));
   $("ocrEndBtn").addEventListener("click", () => openOcrPicker("endPanel"));
+
+  $("ocrFileInput").addEventListener("change", handleOcrFileSelected);
+  $("ocrCloseBtn").addEventListener("click", closeOcrModal);
 }
 
 function updateAutoSectionName() {
@@ -1645,6 +1648,7 @@ async function handleOcrFileSelected(event) {
 
   try {
     await ensureOcrLibrary();
+    $("ocrStatus").textContent = "OCRファイルを読み込んでいます。初回は少し時間がかかります。";
 
     const result = await Tesseract.recognize(file, "jpn+eng", {
       workerPath: "./vendor/tesseract/worker.min.js",
