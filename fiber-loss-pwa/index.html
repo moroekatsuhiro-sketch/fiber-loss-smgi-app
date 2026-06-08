@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#12324a">
+  <title>SM/GI 光ケーブル規格値計算 オフライン</title>
+  <link rel="manifest" href="./manifest.json">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <p class="eyebrow">Fiber Loss Standard Calculator</p>
+      <h1>SM/GI 光ケーブル規格値計算</h1>
+    </div>
+  </header>
+
+  <nav class="bottom-nav" aria-label="画面切替">
+    <button class="nav-btn active" data-screen="calcScreen">計算</button>
+    <button class="nav-btn" data-screen="historyScreen">履歴</button>
+    <button class="nav-btn" data-screen="settingsScreen">設定</button>
+  </nav>
+
+  <main>
+    <section id="calcScreen" class="screen active">
+      <form id="calcForm" autocomplete="off">
+        <section class="card">
+          <h2>区間情報</h2>
+
+          <label>
+            現場名
+            <div class="inline-input">
+              <input id="siteName" type="text" placeholder="例：〇〇ビル">
+              <button type="button" class="sub-btn" id="ocrSiteBtn">写真</button>
+            </div>
+          </label>
+
+          <label>
+            区間名
+            <input id="sectionName" type="text" placeholder="例：1F MDF ～ 3F IDF">
+          </label>
+
+          <div class="grid two">
+            <label>
+              始端盤名
+              <div class="inline-input">
+                <input id="startPanel" type="text" placeholder="例：1F MDF">
+                <button type="button" class="sub-btn" id="ocrStartBtn">写真</button>
+              </div>
+            </label>
+
+            <label>
+              遠端盤名
+              <div class="inline-input">
+                <input id="endPanel" type="text" placeholder="例：3F IDF">
+                <button type="button" class="sub-btn" id="ocrEndBtn">写真</button>
+              </div>
+            </label>
+          </div>
+
+          <div class="grid two">
+            <label>
+              始端LM[m]
+              <input id="startLm" type="number" inputmode="decimal" step="0.001" placeholder="例：1000">
+            </label>
+
+            <label>
+              遠端LM[m]
+              <input id="endLm" type="number" inputmode="decimal" step="0.001" placeholder="例：3500">
+            </label>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>ケーブル条件</h2>
+
+          <label>
+            ケーブル種類
+            <select id="cableType">
+              <option value="SM">SM</option>
+              <option value="GI">GI</option>
+            </select>
+          </label>
+
+          <label id="normalWavelengthWrap">
+            波長
+            <select id="wavelength"></select>
+          </label>
+
+          <div class="grid two">
+            <label>
+              融着点数
+              <input id="spliceCount" type="number" inputmode="numeric" min="0" step="1" value="0">
+            </label>
+
+            <label>
+              コネクタ数（両端合計）
+              <input id="connectorCount" type="number" inputmode="numeric" min="0" step="1" value="2">
+              <span class="hint">片端1個ずつの場合は2</span>
+            </label>
+          </div>
+
+          <section class="sub-section line-config">
+            <h3>線番・測定方向</h3>
+
+            <label>
+              測定方向
+              <select id="measurementMode">
+                <option value="both">双方向</option>
+                <option value="forward">始端側測定のみ</option>
+                <option value="reverse">遠端側測定のみ</option>
+              </select>
+              <span class="hint">双方向の場合は、始端側測定値・遠端側測定値を一覧で入力できます。</span>
+            </label>
+
+            <div class="grid two">
+              <label>
+                始端側芯数
+                <input id="startCoreCount" type="number" inputmode="numeric" min="1" max="288" step="1" value="4">
+              </label>
+
+              <label>
+                遠端側芯数
+                <input id="endCoreCount" type="number" inputmode="numeric" min="1" max="288" step="1" value="4">
+                <span class="hint">基本は始端側と同じ。相手方の芯数が違う場合だけ変更。</span>
+              </label>
+            </div>
+
+            <div class="grid two">
+              <label>
+                始端側 開始線番
+                <input id="startFirstLineNo" type="text" inputmode="text" value="1" placeholder="例：1 / 4 / A-01">
+              </label>
+
+              <label>
+                遠端側 開始線番
+                <input id="endFirstLineNo" type="text" inputmode="text" value="1" placeholder="例：1 / 24 / B-01">
+              </label>
+            </div>
+          </section>
+
+          <label>
+            メモ
+            <textarea id="memo" rows="3" placeholder="任意メモ"></textarea>
+          </label>
+
+          <div class="actions">
+            <button type="button" id="calculateBtn" class="primary">規格値を計算</button>
+            <button type="reset" id="resetBtn" class="secondary">入力クリア</button>
+          </div>
+        </section>
+      </form>
+
+      <section id="resultCard" class="card result-card hidden" aria-live="polite">
+        <h2>計算結果</h2>
+        <div id="errorBox" class="error-box hidden"></div>
+
+        <div id="resultSummary" class="result-summary"></div>
+        <div id="detailBreakdown" class="breakdown"></div>
+      </section>
+
+      <section id="coresCard" class="card hidden">
+        <h2>芯線別測定値</h2>
+        <p class="small">線番は自由に変更できます。始端側・遠端側を別々に連続入力し、最後に入力結果一覧へ反映します。メモは線番1行につき1個記録できます。</p>
+        <div id="coreInputs" class="core-list"></div>
+
+        <div class="actions sticky-actions">
+          <button type="button" id="saveBtn" class="primary">履歴に保存</button>
+          <button type="button" id="cancelEditBtn" class="secondary hidden">編集をキャンセル</button>
+        </div>
+      </section>
+    </section>
+
+    <section id="historyScreen" class="screen">
+      <section class="card">
+        <div class="card-title-row">
+          <h2>保存履歴</h2>
+          <button id="exportCsvBtn" class="secondary small-btn" type="button">CSV出力</button>
+        </div>
+        <div id="historyList" class="history-list"></div>
+      </section>
+    </section>
+
+    <section id="settingsScreen" class="screen">
+      <section class="card">
+        <h2>設定・管理</h2>
+        <p class="small">データはこの端末のブラウザ内に保存されます。ブラウザのデータ削除や端末変更で消える可能性があります。</p>
+
+        <div class="settings-grid">
+          <button id="downloadJsonBtn" type="button" class="secondary">JSONバックアップ</button>
+          <button id="importJsonBtn" type="button" class="secondary">JSON読込</button>
+          <input id="importJsonFile" type="file" accept="application/json" class="hidden">
+          <button id="clearAllBtn" type="button" class="danger">履歴を全削除</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>登録済み規格マスタ</h2>
+        <pre id="standardsPreview" class="standards-preview"></pre>
+      </section>
+    </section>
+  </main>
+
+  <template id="historyItemTemplate">
+    <article class="history-item">
+      <button class="history-toggle" type="button"></button>
+      <div class="history-detail"></div>
+    </article>
+  </template>
+
+
+  <input id="ocrFileInput" class="hidden" type="file" accept="image/*" capture="environment">
+
+  <div id="ocrModal" class="ocr-modal hidden" role="dialog" aria-modal="true" aria-labelledby="ocrModalTitle">
+    <div class="ocr-panel">
+      <div class="card-title-row">
+        <h2 id="ocrModalTitle">盤名OCR確認</h2>
+        <button id="ocrCloseBtn" class="secondary small-btn" type="button">閉じる</button>
+      </div>
+
+      <div id="ocrStatus" class="info-box">写真を読み取っています...</div>
+
+      <img id="ocrPreview" class="ocr-preview hidden" alt="OCR対象画像">
+
+      <div id="ocrCandidates" class="ocr-candidates"></div>
+
+      <details class="ocr-raw">
+        <summary>OCR全文を確認</summary>
+        <textarea id="ocrRawText" rows="7" readonly></textarea>
+      </details>
+    </div>
+  </div>
+  <script src="./app.js"></script>
+</body>
+</html>
