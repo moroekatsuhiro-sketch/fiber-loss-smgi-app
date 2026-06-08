@@ -1,7 +1,7 @@
 {
   "name": "SM/GI 光ケーブル規格値計算",
   "short_name": "SMGI規格値",
-  "description": "SM/GI光ケーブルの規格値計算、両波長測定、芯線別記録、履歴編集、CSV出力をオフラインで行うPWAです。",
+  "description": "SM/GI光ケーブルの規格値計算、両波長測定、芯線別記録、履歴編集、CSV出力をオフラインで行うPWAです。OCRなし安定版。",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

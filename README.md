@@ -286,60 +286,36 @@ SI系は別途、SI専用アプリとして仕様確定後に作成します。
 
 
 
-# SM/GI オフラインOCR試験版
+# SM/GI 光ケーブル規格値計算 OCRなし安定版
 
-## この版の目的
+## 方針
 
-- SO-52Fなどの現場スマホで、完全オフラインOCRを試験するための版です。
-- 計算・履歴・CSV・JSONバックアップは従来どおりオフライン動作します。
-- OCRは `vendor/tesseract/` に必要ファイルを配置するとオフライン動作します。
+OCRは現場写真での読取精度が低いため、削除しました。  
+現場名・始端盤名・遠端盤名は手入力で運用します。
 
-## OCR対象
+## この版の特徴
 
-- 現場名
-- 始端盤名
-- 遠端盤名
+- OCRボタン削除
+- OCRモーダル削除
+- Tesseract関連処理削除
+- vendor/tesseract 不要
+- アプリ容量を軽量化
+- 完全オフラインPWA運用を優先
 
-## OCRファイル配置場所
+## 残している機能
 
-`vendor/tesseract/` に以下を配置してください。
-
-- `tesseract.min.js`
-- `worker.min.js`
-- `tesseract-core.wasm.js`
-- `tesseract-core.wasm`
-- `jpn.traineddata.gz`
-- `eng.traineddata.gz`
-
-## アプリ側のOCR参照先
-
-- `tesseract.min.js`：`./vendor/tesseract/tesseract.min.js`
-- `workerPath`：`./vendor/tesseract/worker.min.js`
-- `corePath`：`./vendor/tesseract/tesseract-core.wasm.js`
-- `langPath`：`./vendor/tesseract/`
-
-## 注意
-
-このZIPにはOCR本体ファイルは同梱していません。
-この実行環境から外部のOCRデータを直接取得できないためです。
-
-OCRファイルを配置した後、再度ZIP化してスマホへ入れるか、VS Code + Live Serverで読み込んでホーム画面へ追加してください。
-
-
-
-## OCRファイル取得スクリプト
-
-この版には `download-ocr-files.ps1` を追加しています。
-
-Windowsでこのファイルを PowerShell 実行すると、`vendor/tesseract/` にオフラインOCR用ファイルを取得します。
-
-取得完了後、VS Code + Live Serverで `index.html` を開き、スマホ側でホーム画面に追加してください。
-
-
-
-## OCR修正：fix-ocr-v2
-
-- 写真選択後にOCR処理が開始されない問題を修正しました。
-- `ocrFileInput` の `change` イベントに `handleOcrFileSelected` を接続しました。
-- OCR確認モーダルの閉じるボタンを接続しました。
-- Service WorkerでOCR関連ファイルもキャッシュ対象にしました。
+- SM 1310nm / 1550nm
+- GI 850nm / 1300nm
+- 両波長同時計算
+- 波長ごとの始端側・遠端側測定入力
+- 入力結果一覧
+- NG赤表示
+- 始端側芯数 / 遠端側芯数の個別設定
+- 開始線番から自動連番
+- 芯線数変更時の測定値保持
+- 履歴保存
+- 履歴編集
+- 履歴1件ごとのCSV出力
+- 全履歴CSV出力
+- JSONバックアップ / 読み込み
+- PWAオフライン対応

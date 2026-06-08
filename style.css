@@ -462,87 +462,6 @@ button {
 }
 
 
-/* OCR */
-.ocr-modal {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  padding: 16px;
-  background: rgba(7, 18, 28, 0.68);
-  overflow: auto;
-}
-
-.ocr-panel {
-  max-width: 760px;
-  margin: 5vh auto;
-  background: #fff;
-  border-radius: var(--radius);
-  padding: 16px;
-  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.28);
-}
-
-.ocr-preview {
-  width: 100%;
-  max-height: 280px;
-  object-fit: contain;
-  background: #0f1720;
-  border-radius: 14px;
-  margin: 12px 0;
-}
-
-.ocr-candidates {
-  display: grid;
-  gap: 10px;
-  margin-top: 14px;
-}
-
-.ocr-candidate-btn {
-  width: 100%;
-  text-align: left;
-  background: #eef6fb;
-  color: var(--primary);
-  border: 1px solid #c9deea;
-  min-height: 46px;
-}
-
-.ocr-manual-row {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 8px;
-  align-items: end;
-  margin-top: 14px;
-}
-
-.ocr-raw {
-  margin-top: 14px;
-}
-
-.ocr-raw summary {
-  cursor: pointer;
-  color: var(--muted);
-  font-weight: 700;
-}
-
-#ocrRawText {
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 13px;
-  min-height: 130px;
-}
-
-@media (max-width: 520px) {
-  .ocr-modal {
-    padding: 10px;
-  }
-
-  .ocr-panel {
-    margin: 2vh auto;
-  }
-
-  .ocr-manual-row {
-    grid-template-columns: 1fr;
-  }
-}
-
 
 /* 双方向測定・自由線番 */
 .core-row {
@@ -945,11 +864,6 @@ button {
   }
 }
 
-
-/* fix6: 現場名OCRボタン */
-#siteName + .sub-btn {
-  white-space: nowrap;
-}
 
 
 /* fix7: 両波長入力 */
