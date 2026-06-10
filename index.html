@@ -2,226 +2,190 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SM/GI 光ケーブル規格値計算 試作版</title>
   <meta name="theme-color" content="#12324a">
-  <title>SM/GI 光ケーブル規格値計算 オフライン</title>
   <link rel="manifest" href="./manifest.json">
-  <link rel="stylesheet" href="./style.css">
+  <link rel="stylesheet" href="./style.css?v=smgi-wavecal-trial-fix4">
 </head>
 <body>
-  <header class="app-header">
-    <div>
-      <p class="eyebrow">Fiber Loss Standard Calculator</p>
-      <h1>SM/GI 光ケーブル規格値計算</h1>
-    </div>
-  </header>
+<header class="app-header">
+  <h1>SM/GI 光ケーブル規格値計算</h1>
+  <p>波長別校正値 / 波長別芯線数 / 連番一覧表示 / オフラインPWA</p>
+</header>
 
-  <nav class="bottom-nav" aria-label="画面切替">
-    <button class="nav-btn active" data-screen="calcScreen">計算</button>
-    <button class="nav-btn" data-screen="historyScreen">履歴</button>
-    <button class="nav-btn" data-screen="settingsScreen">設定</button>
-  </nav>
+<div id="inputPreview" class="input-preview hidden" aria-live="polite">
+  <div class="preview-kicker">入力中</div>
+  <div id="previewLabel" class="preview-label">--</div>
+  <div id="previewValue" class="preview-value">未入力</div>
+  <div id="previewMeta" class="preview-meta hidden"></div>
+</div>
 
-  <main>
-    <section id="calcScreen" class="screen active">
-      <form id="calcForm" autocomplete="off">
-        <section class="card">
-          <h2>区間情報</h2>
+<nav class="bottom-nav" aria-label="画面切替">
+  <button type="button" class="nav-btn active" data-screen="calcScreen">計算</button>
+  <button type="button" class="nav-btn" data-screen="historyScreen">履歴</button>
+  <button type="button" class="nav-btn" data-screen="settingsScreen">設定</button>
+</nav>
 
-          <label>
-            現場名
-            <input id="siteName" type="text" placeholder="例：〇〇ビル">
-          </label>
+<main class="app-main">
+  <section id="calcScreen" class="screen active">
+    <form id="calcForm" class="card">
+      <h2>基本情報</h2>
 
-          <label>
-            区間名
-            <input id="sectionName" type="text" placeholder="例：1F MDF ～ 3F IDF">
-          </label>
+      <div class="grid two">
+        <label>
+          工事番号
+          <input id="workNo" type="text" inputmode="numeric" maxlength="5" placeholder="例：26001">
+          <span class="hint">K-を除いた数字5桁。表示・履歴・CSVでは K-26001 形式。</span>
+        </label>
 
-          <div class="grid two">
-            <label>
-            始端盤名
-            <input id="startPanel" type="text" placeholder="例：1F MDF">
-          </label>
-
-            <label>
-            遠端盤名
-            <input id="endPanel" type="text" placeholder="例：3F IDF">
-          </label>
-          </div>
-
-          <div class="grid two">
-            <label>
-              始端LM[m]
-              <input id="startLm" type="number" inputmode="decimal" step="0.001" placeholder="例：1000">
-            </label>
-
-            <label>
-              遠端LM[m]
-              <input id="endLm" type="number" inputmode="decimal" step="0.001" placeholder="例：3500">
-            </label>
-          </div>
-        </section>
-
-        <section class="card">
-          <h2>ケーブル条件</h2>
-
-          <label>
-            ケーブル種類
-            <select id="cableType">
-              <option value="SM">SM</option>
-              <option value="GI">GI</option>
-            </select>
-          </label>
-
-          <label id="normalWavelengthWrap">
-            波長
-            <select id="wavelength"></select>
-          </label>
-
-          <div class="grid two">
-            <label>
-              融着点数
-              <input id="spliceCount" type="number" inputmode="numeric" min="0" step="1" value="0">
-            </label>
-
-            <label>
-              コネクタ数（両端合計）
-              <input id="connectorCount" type="number" inputmode="numeric" min="0" step="1" value="2">
-              <span class="hint">片端1個ずつの場合は2</span>
-            </label>
-          </div>
-
-          <section class="sub-section line-config">
-            <h3>線番・測定方向</h3>
-
-            <label>
-              測定方向
-              <select id="measurementMode">
-                <option value="both">双方向</option>
-                <option value="forward">始端側測定のみ</option>
-                <option value="reverse">遠端側測定のみ</option>
-              </select>
-              <span class="hint">双方向の場合は、始端側測定値・遠端側測定値を一覧で入力できます。</span>
-            </label>
-
-            <div class="grid two">
-              <label>
-                始端側芯数
-                <input id="startCoreCount" type="number" inputmode="numeric" min="1" max="288" step="1" value="4">
-              </label>
-
-              <label>
-                遠端側芯数
-                <input id="endCoreCount" type="number" inputmode="numeric" min="1" max="288" step="1" value="4">
-                <span class="hint">基本は始端側と同じ。相手方の芯数が違う場合だけ変更。</span>
-              </label>
-            </div>
-
-            <div class="grid two">
-              <label>
-                始端側 開始線番
-                <input id="startFirstLineNo" type="text" inputmode="text" value="1" placeholder="例：1 / 4 / A-01">
-              </label>
-
-              <label>
-                遠端側 開始線番
-                <input id="endFirstLineNo" type="text" inputmode="text" value="1" placeholder="例：1 / 24 / B-01">
-              </label>
-            </div>
-          </section>
-
-          <label>
-            メモ
-            <textarea id="memo" rows="3" placeholder="任意メモ"></textarea>
-          </label>
-
-          <div class="actions">
-            <button type="button" id="calculateBtn" class="primary">規格値を計算</button>
-            <button type="reset" id="resetBtn" class="secondary">入力クリア</button>
-          </div>
-        </section>
-      </form>
-
-      <section id="resultCard" class="card result-card hidden" aria-live="polite">
-        <h2>計算結果</h2>
-        <div id="errorBox" class="error-box hidden"></div>
-
-        <div id="resultSummary" class="result-summary"></div>
-        <div id="detailBreakdown" class="breakdown"></div>
-      </section>
-
-      <section id="coresCard" class="card hidden">
-        <h2>芯線別測定値</h2>
-        <p class="small">線番は自由に変更できます。始端側・遠端側を別々に連続入力し、最後に入力結果一覧へ反映します。メモは線番1行につき1個記録できます。</p>
-        <div id="coreInputs" class="core-list"></div>
-
-        <div class="actions sticky-actions">
-          <button type="button" id="saveBtn" class="primary">履歴に保存</button>
-          <button type="button" id="cancelEditBtn" class="secondary hidden">編集をキャンセル</button>
-        </div>
-      </section>
-    </section>
-
-    <section id="historyScreen" class="screen">
-      <section class="card">
-        <div class="card-title-row">
-          <h2>保存履歴</h2>
-          <button id="exportCsvBtn" class="secondary small-btn" type="button">CSV出力</button>
-        </div>
-        <div id="historyList" class="history-list"></div>
-      </section>
-    </section>
-
-    <section id="settingsScreen" class="screen">
-      <section class="card">
-        <h2>設定・管理</h2>
-        <p class="small">データはこの端末のブラウザ内に保存されます。ブラウザのデータ削除や端末変更で消える可能性があります。</p>
-
-        <div class="settings-grid">
-          <button id="downloadJsonBtn" type="button" class="secondary">JSONバックアップ</button>
-          <button id="importJsonBtn" type="button" class="secondary">JSON読込</button>
-          <input id="importJsonFile" type="file" accept="application/json" class="hidden">
-          <button id="clearAllBtn" type="button" class="danger">履歴を全削除</button>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>登録済み規格マスタ</h2>
-        <pre id="standardsPreview" class="standards-preview"></pre>
-      </section>
-    </section>
-  </main>
-
-  <template id="historyItemTemplate">
-    <article class="history-item">
-      <button class="history-toggle" type="button"></button>
-      <div class="history-detail"></div>
-    </article>
-  </template>
-
-
-  <input id="ocrFileInput" class="hidden" type="file" accept="image/*" capture="environment">
-
-  <div id="ocrModal" class="ocr-modal hidden" role="dialog" aria-modal="true" aria-labelledby="ocrModalTitle">
-    <div class="ocr-panel">
-      <div class="card-title-row">
-        <h2 id="ocrModalTitle">盤名OCR確認</h2>
-        <button id="ocrCloseBtn" class="secondary small-btn" type="button">閉じる</button>
+        <label>
+          現場名
+          <input id="siteName" type="text" placeholder="例：〇〇ビル">
+        </label>
       </div>
 
-      <div id="ocrStatus" class="info-box">写真を読み取っています...</div>
+      <div class="grid two">
+        <label>
+          区間名
+          <input id="sectionName" type="text" placeholder="始端・遠端から自動生成">
+        </label>
 
-      <img id="ocrPreview" class="ocr-preview hidden" alt="OCR対象画像">
+        <label>
+          始端盤名
+          <input id="startPanel" type="text" placeholder="例：MDF">
+        </label>
+      </div>
 
-      <div id="ocrCandidates" class="ocr-candidates"></div>
+      <div class="grid two">
+        <label>
+          遠端盤名
+          <input id="endPanel" type="text" placeholder="例：IDF">
+        </label>
 
-      <details class="ocr-raw">
-        <summary>OCR全文を確認</summary>
-        <textarea id="ocrRawText" rows="7" readonly></textarea>
-      </details>
+        <label>
+          始端レングスマーク m
+          <input id="startLm" type="number" inputmode="decimal" step="0.001" placeholder="例：1000">
+        </label>
+      </div>
+
+      <div class="grid two">
+        <label>
+          遠端レングスマーク m
+          <input id="endLm" type="number" inputmode="decimal" step="0.001" placeholder="例：1100">
+        </label>
+      </div>
+
+      <h2>SM/GI規格</h2>
+
+      <div class="grid two">
+        <label>
+          ケーブル種類
+          <select id="cableType">
+            <option value="SM">SM</option>
+            <option value="GI">GI</option>
+          </select>
+        </label>
+
+        <label>
+          波長
+          <select id="wavelength">
+            <option value="1310">1310nm</option>
+            <option value="1550">1550nm</option>
+            <option value="both" selected>1310nm / 1550nm 両方</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="grid two">
+        <label>
+          融着点数
+          <input id="spliceCount" type="number" inputmode="numeric" min="0" step="1" value="2">
+          <span class="hint">初期値2点。</span>
+        </label>
+
+        <label>
+          コネクタ数
+          <input id="connectorCount" type="number" inputmode="numeric" min="0" step="1" value="2">
+          <span class="hint">初期値2個。</span>
+        </label>
+      </div>
+
+      <h2>波長別 設定</h2>
+      <p class="hint">波長選択に合わせて、校正値・芯線数・開始線番の入力欄を切り替えます。校正値は記録用のみで、計算・判定には使いません。</p>
+      <div id="wavelengthConfigList"></div>
+
+      <label>
+        区間メモ
+        <textarea id="memo" rows="3" placeholder="任意メモ"></textarea>
+      </label>
+
+      <div id="errorBox" class="error-box hidden"></div>
+
+      <div class="actions sticky-actions">
+        <button type="button" id="calculateBtn" class="primary">規格値を計算</button>
+        <button type="reset" class="secondary">入力リセット</button>
+      </div>
+    </form>
+
+    <section id="resultCard" class="card hidden">
+      <h2>計算結果</h2>
+      <div id="resultSummary"></div>
+      <div id="detailBreakdown" class="breakdown"></div>
+    </section>
+
+    <section id="measureCard" class="card">
+      <h2>波長別 測定値入力</h2>
+      <p class="hint">履歴保存前でも測定値一覧を表示します。始端側一覧には始点校正値だけ、遠端側一覧には終点校正値だけ表示します。</p>
+      <div id="measureInputArea" class="measure-input-area"></div>
+
+      <div class="summary-block">
+        <h3>入力結果一覧</h3>
+        <p class="hint">履歴保存前でも表示します。測定値入力欄とは別エリアなので、一覧更新で入力欄は消えません。</p>
+        <div id="liveSummaryList"></div>
+      </div>
+
+      <div class="actions sticky-actions">
+        <button type="button" id="saveBtn" class="primary">履歴に保存</button>
+        <button type="button" id="cancelEditBtn" class="secondary hidden">編集をキャンセル</button>
+      </div>
+    </section>
+  </section>
+
+  <section id="historyScreen" class="screen">
+    <section class="card">
+      <h2>履歴</h2>
+      <div class="actions">
+        <button type="button" id="exportCsvBtn" class="secondary">全履歴CSV出力</button>
+        <button type="button" id="downloadJsonBtn" class="secondary">JSONバックアップ</button>
+        <button type="button" id="importJsonBtn" class="secondary">JSON読込</button>
+        <button type="button" id="clearAllBtn" class="danger">全履歴削除</button>
+        <input id="importJsonFile" type="file" accept="application/json" class="hidden">
+      </div>
+      <div id="historyList" class="history-list"></div>
+    </section>
+  </section>
+
+  <section id="settingsScreen" class="screen">
+    <section class="card">
+      <h2>SM/GIマスター</h2>
+      <p class="hint">規格値・測定値・校正値は小数第2位表示。</p>
+      <pre id="masterPreview" class="code-preview"></pre>
+    </section>
+  </section>
+</main>
+
+<div id="reportModal" class="report-modal hidden" role="dialog" aria-modal="true" aria-label="履歴控え表示">
+  <div class="report-modal-bar">
+    <strong>履歴控え表示</strong>
+    <div class="report-modal-actions">
+      <button type="button" id="printReportBtn" class="secondary">印刷/PDF</button>
+      <button type="button" id="closeReportBtn" class="danger">閉じる</button>
     </div>
   </div>
-  <script src="./app.js"></script>
+  <div id="reportContent" class="report-content"></div>
+</div>
+
+<script src="./app.js?v=smgi-wavecal-trial-fix4"></script>
 </body>
 </html>

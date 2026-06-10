@@ -1,9 +1,9 @@
-const STORAGE_KEY = "fiberLossRecords.v1";
+const STORAGE_KEY = "fiberLossSmgiWaveCalTrialRecordsV1";
+const DRAFT_KEY = "fiberLossSmgiWaveCalTrialDraftV1";
 
-const normalStandards = {
+const smgiMaster = {
   SM: {
     name: "SM",
-    formulaType: "normal",
     wavelengths: {
       1310: { cableLoss: 0.50, spliceLoss: 0.15, connectorLoss: 0.35 },
       1550: { cableLoss: 0.30, spliceLoss: 0.15, connectorLoss: 0.35 }
@@ -11,7 +11,6 @@ const normalStandards = {
   },
   GI: {
     name: "GI",
-    formulaType: "normal",
     wavelengths: {
       850: { cableLoss: 3.00, spliceLoss: 0.15, connectorLoss: 0.35 },
       1300: { cableLoss: 1.00, spliceLoss: 0.15, connectorLoss: 0.35 }
@@ -19,947 +18,632 @@ const normalStandards = {
   }
 };
 
-const siStandards = {
-  "S01-L2": {
-    name: "S01-L2",
-    wavelength: 850,
-    formulaType: "af_plus_fixed",
-    cableLoss: 5.5,
-    fixedLoss: 2.0,
-    decimalProcess: "truncate_1_decimal"
-  },
-  "DL-72": {
-    name: "DL-72",
-    wavelength: 850,
-    formulaType: "af_plus_fixed",
-    cableLoss: 6.0,
-    fixedLoss: 2.0,
-    decimalProcess: "truncate_1_decimal"
-  },
-  "DLC-L2": {
-    name: "DLC-L2",
-    wavelength: 850,
-    formulaType: "af_plus_fixed",
-    cableLoss: 6.0,
-    fixedLoss: 2.0,
-    decimalProcess: "truncate_1_decimal"
-  },
-  "CF系(圧着)": {
-    name: "CF系(圧着)",
-    wavelength: 810,
-    formulaType: "cf_press_piecewise",
-    fixedLoss: 1.5,
-    decimalProcess: "truncate_1_decimal"
-  }
-};
+let latestCalculation = null;
+let editingRecordId = null;
+let waveDraft = {};
+let isRestoringDraft = false;
+let suppressDraftSave = false;
 
 const $ = (id) => document.getElementById(id);
 
-let latestCalculation = null;
-let editingRecordId = null;
-let measurementDraftRows = [];
+const previewLabels = {
+  workNo: "工事番号",
+  siteName: "現場名",
+  sectionName: "区間名",
+  startPanel: "始端盤名",
+  endPanel: "遠端盤名",
+  startLm: "始端レングスマーク",
+  endLm: "遠端レングスマーク",
+  cableType: "ケーブル種類",
+  wavelength: "波長",
+  spliceCount: "融着点数",
+  connectorCount: "コネクタ数",
+  memo: "区間メモ"
+};
 
 document.addEventListener("DOMContentLoaded", () => {
   initNavigation();
-  initForm();
-  initButtons();
-  generateCoreInputs();
+  initEvents();
+  updateWavelengthOptions();
+  renderWaveConfigs(true);
+  renderMeasurements(true);
   renderHistory();
-  renderStandardsPreview();
+  $("masterPreview").textContent = JSON.stringify(smgiMaster, null, 2);
+  setupInputPreviewForAllFields();
+  if ($("inputPreview")) document.body.appendChild($("inputPreview"));
+  bindViewportPreviewReposition();
+  restoreDraftIfNeeded();
   registerServiceWorker();
 });
 
 function initNavigation() {
   document.querySelectorAll(".nav-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll(".nav-btn").forEach((b) => b.classList.remove("active"));
-      document.querySelectorAll(".screen").forEach((s) => s.classList.remove("active"));
-      btn.classList.add("active");
-      $(btn.dataset.screen).classList.add("active");
-      if (btn.dataset.screen === "historyScreen") renderHistory();
+    btn.addEventListener("click", () => switchScreen(btn.dataset.screen));
+  });
+}
+
+function switchScreen(screenId) {
+  document.querySelectorAll(".screen").forEach((screen) => screen.classList.remove("active"));
+  document.querySelectorAll(".nav-btn").forEach((btn) => btn.classList.toggle("active", btn.dataset.screen === screenId));
+  $(screenId).classList.add("active");
+  if (screenId === "historyScreen") renderHistory();
+}
+
+function initEvents() {
+  ["startPanel", "endPanel"].forEach((id) => {
+    $(id).addEventListener("input", () => {
+      updateAutoSectionName();
+      saveDraftSoon();
     });
   });
-}
 
-function initForm() {
+  $("workNo").addEventListener("input", () => {
+    $("workNo").value = $("workNo").value.replace(/\D/g, "").slice(0, 5);
+    saveDraftSoon();
+    updatePreviewForActiveElement();
+  });
+
+  $("sectionName").addEventListener("input", () => {
+    $("sectionName").dataset.manual = "true";
+    saveDraftSoon();
+  });
+
   $("cableType").addEventListener("change", () => {
-    updateCableMode();
-    clearResultOnly();
+    collectWaveInputs();
+    updateWavelengthOptions();
+    renderWaveConfigs(true);
+    renderMeasurements(true);
+    clearCalculationOnly();
+    saveDraftSoon();
   });
 
-  initLineConfigControls();
-
-  $("startPanel").addEventListener("input", updateAutoSectionName);
-  $("endPanel").addEventListener("input", updateAutoSectionName);
-  $("sectionName").addEventListener("input", rememberManualSectionName);
-
-  ["startLm", "endLm", "wavelength", "spliceCount", "connectorCount"].forEach((id) => {
-    const el = $(id);
-    if (!el) return;
-    el.addEventListener("input", clearResultOnly);
-    el.addEventListener("change", clearResultOnly);
+  $("wavelength").addEventListener("change", () => {
+    collectWaveInputs();
+    renderWaveConfigs(true);
+    renderMeasurements(true);
+    clearCalculationOnly();
+    saveDraftSoon();
   });
 
-  $("calcForm").addEventListener("reset", () => {
-    setTimeout(() => {
-      updateCableMode();
-      generateCoreInputs();
-      clearResultOnly();
-      $("connectorCount").value = 2;
-      $("startCoreCount").value = 4;
-      $("endCoreCount").value = 4;
-      $("startFirstLineNo").value = "1";
-      $("endFirstLineNo").value = "1";
-      $("measurementMode").value = "both";
-      $("endCoreCount").dataset.manual = "false";
-      $("sectionName").dataset.lastAuto = "";
-      $("sectionName").dataset.manual = "false";
-      clearMeasurementDraftRows();
-      cancelEditMode(false);
-    }, 0);
+  ["startLm", "endLm", "spliceCount", "connectorCount", "siteName", "memo"].forEach((id) => {
+    $(id).addEventListener("input", () => {
+      if (["startLm", "endLm", "spliceCount", "connectorCount"].includes(id)) clearCalculationOnly();
+      saveDraftSoon();
+    });
   });
 
-  updateCableMode();
-}
-
-function initButtons() {
   $("calculateBtn").addEventListener("click", handleCalculate);
   $("saveBtn").addEventListener("click", handleSave);
   $("cancelEditBtn").addEventListener("click", cancelEditMode);
-  $("exportCsvBtn").addEventListener("click", exportCsv);
+  $("exportCsvBtn").addEventListener("click", exportAllCsv);
   $("clearAllBtn").addEventListener("click", clearAllRecords);
   $("downloadJsonBtn").addEventListener("click", downloadJsonBackup);
   $("importJsonBtn").addEventListener("click", () => $("importJsonFile").click());
   $("importJsonFile").addEventListener("change", importJsonBackup);
+  $("closeReportBtn")?.addEventListener("click", closeReportModal);
+  $("printReportBtn")?.addEventListener("click", () => window.print());
 
-  $("ocrSiteBtn").addEventListener("click", () => openOcrPicker("siteName"));
-  $("ocrStartBtn").addEventListener("click", () => openOcrPicker("startPanel"));
-  $("ocrEndBtn").addEventListener("click", () => openOcrPicker("endPanel"));
+  $("calcForm").addEventListener("reset", () => {
+    setTimeout(() => {
+      localStorage.removeItem(DRAFT_KEY);
+      resetStateAfterFormReset();
+    }, 0);
+  });
 }
 
 function updateAutoSectionName() {
-  const sectionInput = $("sectionName");
-  const startPanel = $("startPanel").value.trim();
-  const endPanel = $("endPanel").value.trim();
-  const lastAutoValue = sectionInput.dataset.lastAuto || "";
-  const isManual = sectionInput.dataset.manual === "true";
-  const currentValue = sectionInput.value.trim();
+  if ($("sectionName").dataset.manual === "true") return;
+  const start = $("startPanel").value.trim();
+  const end = $("endPanel").value.trim();
+  $("sectionName").value = start && end ? `${start} ～ ${end}` : "";
+}
 
-  // 区間名が手入力で変更済みなら、自動上書きしない。
-  // ただし、現在値が前回の自動生成値と同じなら自動更新を続ける。
-  if (isManual && currentValue !== "" && currentValue !== lastAutoValue) {
-    return;
+function getAvailableWavelengths(type = $("cableType").value) {
+  return type === "SM" ? [1310, 1550] : [850, 1300];
+}
+
+function updateWavelengthOptions() {
+  const type = $("cableType").value;
+  const select = $("wavelength");
+  const current = select.value;
+  const waves = getAvailableWavelengths(type);
+  select.innerHTML = `
+    <option value="${waves[0]}">${waves[0]}nm</option>
+    <option value="${waves[1]}">${waves[1]}nm</option>
+    <option value="both">${waves[0]}nm / ${waves[1]}nm 両方</option>
+  `;
+  select.value = [String(waves[0]), String(waves[1]), "both"].includes(current) ? current : "both";
+}
+
+function getSelectedWavelengths() {
+  const value = $("wavelength").value;
+  if (value !== "both") return [Number(value)];
+  return getAvailableWavelengths();
+}
+
+function ensureWave(wave) {
+  const key = String(wave);
+  if (!waveDraft[key]) {
+    waveDraft[key] = {
+      startCalibration: "",
+      endCalibration: "",
+      startCoreCount: 4,
+      endCoreCount: 4,
+      startFirstLineNo: "1",
+      endFirstLineNo: "1",
+      startValues: [],
+      endValues: []
+    };
   }
-
-  const nextAutoValue = startPanel && endPanel ? `${startPanel} ～ ${endPanel}` : "";
-  sectionInput.value = nextAutoValue;
-  sectionInput.dataset.lastAuto = nextAutoValue;
-  sectionInput.dataset.manual = "false";
+  return waveDraft[key];
 }
 
-function rememberManualSectionName() {
-  const sectionInput = $("sectionName");
-  const lastAutoValue = sectionInput.dataset.lastAuto || "";
-  const currentValue = sectionInput.value.trim();
+function collectWaveInputs() {
+  if (isRestoringDraft) return;
 
-  sectionInput.dataset.manual = currentValue !== "" && currentValue !== lastAutoValue ? "true" : "false";
+  document.querySelectorAll("[data-wave-config]").forEach((section) => {
+    const wave = section.dataset.waveConfig;
+    const d = ensureWave(wave);
+    d.startCalibration = $(`startCalibration_${wave}`)?.value ?? d.startCalibration ?? "";
+    d.endCalibration = $(`endCalibration_${wave}`)?.value ?? d.endCalibration ?? "";
+    d.startCoreCount = getIntegerFromInput(`startCoreCount_${wave}`, d.startCoreCount || 4);
+    d.endCoreCount = getIntegerFromInput(`endCoreCount_${wave}`, d.endCoreCount || 4);
+    d.startFirstLineNo = $(`startFirstLineNo_${wave}`)?.value || d.startFirstLineNo || "1";
+    d.endFirstLineNo = $(`endFirstLineNo_${wave}`)?.value || d.endFirstLineNo || "1";
+  });
+
+  document.querySelectorAll(".measure-input").forEach((input) => {
+    const wave = input.dataset.wave;
+    const side = input.dataset.side;
+    const index = Number(input.dataset.index);
+    const d = ensureWave(wave);
+    const listName = side === "start" ? "startValues" : "endValues";
+    if (!d[listName][index]) d[listName][index] = {};
+    d[listName][index].value = input.value;
+    d[listName][index].lineNo = input.dataset.lineNo || d[listName][index].lineNo || "";
+  });
+
+  document.querySelectorAll(".line-memo-input").forEach((input) => {
+    const wave = input.dataset.wave;
+    const side = input.dataset.side;
+    const index = Number(input.dataset.index);
+    const d = ensureWave(wave);
+    const listName = side === "start" ? "startValues" : "endValues";
+    if (!d[listName][index]) d[listName][index] = {};
+    d[listName][index].memo = input.value;
+    d[listName][index].lineNo = input.dataset.lineNo || d[listName][index].lineNo || "";
+  });
 }
 
+function getIntegerFromInput(id, fallback) {
+  const el = $(id);
+  if (!el) return fallback;
+  const v = Math.floor(Number(el.value));
+  if (!Number.isFinite(v) || v < 1) return fallback;
+  return Math.min(288, v);
+}
 
-function initLineConfigControls() {
-  const ids = ["measurementMode", "startCoreCount", "endCoreCount", "startFirstLineNo", "endFirstLineNo"];
+function renderWaveConfigs(keepValues) {
+  if (keepValues && !isRestoringDraft) collectWaveInputs();
 
-  ids.forEach((id) => {
-    const el = $(id);
-    if (!el) return;
+  const waves = getSelectedWavelengths();
+  $("wavelengthConfigList").innerHTML = waves.map((wave) => {
+    const d = ensureWave(wave);
+    return `
+      <section class="wave-config-card" data-wave-config="${wave}">
+        <div class="wave-title">
+          <strong>${wave}nm 設定</strong>
+          <span class="hint">${wave}nm用の校正値・芯線数・開始線番</span>
+        </div>
 
-    el.addEventListener("input", () => {
-      if (id === "startCoreCount") syncEndCoreCountIfNeeded();
-      if (id === "endCoreCount") $("endCoreCount").dataset.manual = "true";
-      generateCoreInputs(true);
-      clearResultOnly();
+        <div class="config-subtitle">校正値（記録用のみ）</div>
+        <div class="grid two">
+          <label>
+            ${wave}nm 始点校正値 dB
+            <input id="startCalibration_${wave}" class="wave-config-input calibration-input" data-wave="${wave}" data-kind="startCalibration" type="number" inputmode="decimal" step="0.01" value="${escapeHtml(d.startCalibration ?? "")}" placeholder="例：0.00">
+          </label>
+          <label>
+            ${wave}nm 終点校正値 dB
+            <input id="endCalibration_${wave}" class="wave-config-input calibration-input" data-wave="${wave}" data-kind="endCalibration" type="number" inputmode="decimal" step="0.01" value="${escapeHtml(d.endCalibration ?? "")}" placeholder="例：0.00">
+          </label>
+        </div>
+
+        <div class="config-subtitle">芯線数・線番</div>
+        <div class="grid two">
+          <label>
+            ${wave}nm 芯線数 始端
+            <input id="startCoreCount_${wave}" class="wave-config-input" data-wave="${wave}" data-kind="startCoreCount" type="number" inputmode="numeric" min="1" max="288" step="1" value="${escapeHtml(String(d.startCoreCount ?? 4))}">
+          </label>
+          <label>
+            ${wave}nm 芯線数 遠端
+            <input id="endCoreCount_${wave}" class="wave-config-input" data-wave="${wave}" data-kind="endCoreCount" type="number" inputmode="numeric" min="1" max="288" step="1" value="${escapeHtml(String(d.endCoreCount ?? 4))}">
+          </label>
+        </div>
+        <div class="grid two">
+          <label>
+            ${wave}nm 始端側開始線番
+            <input id="startFirstLineNo_${wave}" class="wave-config-input" data-wave="${wave}" data-kind="startFirstLineNo" type="text" value="${escapeHtml(d.startFirstLineNo ?? "1")}">
+          </label>
+          <label>
+            ${wave}nm 遠端側開始線番
+            <input id="endFirstLineNo_${wave}" class="wave-config-input" data-wave="${wave}" data-kind="endFirstLineNo" type="text" value="${escapeHtml(d.endFirstLineNo ?? "1")}">
+          </label>
+        </div>
+      </section>
+    `;
+  }).join("");
+
+  document.querySelectorAll(".wave-config-input").forEach((input) => {
+    input.addEventListener("focus", () => showPreviewForElement(input));
+    input.addEventListener("input", () => {
+      collectWaveInputs();
+      if (input.dataset.kind?.includes("CoreCount") || input.dataset.kind?.includes("FirstLineNo")) {
+        renderMeasurements(true);
+        clearCalculationOnly();
+      } else {
+        renderLiveSummary();
+      }
+      saveDraftSoon();
+      updatePreviewForActiveElement();
     });
-
-    el.addEventListener("change", () => {
-      if (id === "startCoreCount") syncEndCoreCountIfNeeded();
-      if (id === "endCoreCount") $("endCoreCount").dataset.manual = "true";
-      generateCoreInputs(true);
-      clearResultOnly();
+    input.addEventListener("blur", () => {
+      if (input.classList.contains("calibration-input")) formatCalibrationInput(input);
+      collectWaveInputs();
+      renderLiveSummary();
+      saveDraftSoon();
     });
   });
 
-  $("endCoreCount").dataset.manual = "false";
+  setupInputPreviewForAllFields();
 }
 
-function syncEndCoreCountIfNeeded() {
-  const endInput = $("endCoreCount");
-  if (endInput.dataset.manual !== "true") {
-    endInput.value = $("startCoreCount").value;
+function renderMeasurements(keepValues) {
+  if (keepValues && !isRestoringDraft) collectWaveInputs();
+
+  renderMeasurementInputs();
+  renderLiveSummary();
+}
+
+function renderMeasurementInputs() {
+  const target = $("measureInputArea");
+  if (!target) return;
+
+  const waves = latestCalculation?.wavelengths || getSelectedWavelengths();
+
+  target.innerHTML = `
+    <div class="input-block">
+      ${waves.map((wave) => renderWaveMeasureInput(wave)).join("")}
+    </div>
+  `;
+
+  target.querySelectorAll(".measure-input").forEach((input) => {
+    input.addEventListener("focus", () => showPreviewForElement(input));
+    input.addEventListener("input", () => {
+      collectWaveInputs();
+      updateJudgements();
+      renderLiveSummary();
+      saveDraftSoon();
+      updatePreviewForActiveElement();
+    });
+    input.addEventListener("blur", () => {
+      formatMeasuredInput(input);
+      collectWaveInputs();
+      updateJudgements();
+      renderLiveSummary();
+      saveDraftSoon();
+    });
+  });
+
+  target.querySelectorAll(".line-memo-input").forEach((input) => {
+    input.addEventListener("focus", () => showPreviewForElement(input));
+    input.addEventListener("input", () => {
+      collectWaveInputs();
+      renderLiveSummary();
+      saveDraftSoon();
+      updatePreviewForActiveElement();
+    });
+  });
+
+  setupInputPreviewForAllFields();
+  updateJudgements();
+}
+
+function renderWaveMeasureInput(wave) {
+  const d = ensureWave(wave);
+  const standard = latestCalculation?.results?.[wave]?.displayStandardValue || "";
+  return `
+    <section class="wave-measure-card" data-wave-measure="${wave}">
+      <div class="wave-title">
+        <strong>${wave}nm 測定値入力</strong>
+        <span class="hint">規格値：${standard ? standard + " dB" : "未計算"} / 始端 ${d.startCoreCount}芯 / 遠端 ${d.endCoreCount}芯</span>
+      </div>
+      ${renderSideInput(wave, "start", "始端側 → 遠端側", d.startCoreCount, d.startFirstLineNo, d.startCalibration, d.startValues)}
+      ${renderSideInput(wave, "end", "遠端側 → 始端側", d.endCoreCount, d.endFirstLineNo, d.endCalibration, d.endValues)}
+    </section>
+  `;
+}
+
+function renderSideInput(wave, side, title, count, firstLineNo, calibration, values) {
+  const calibrationLabel = side === "start" ? "始点校正値" : "終点校正値";
+  const rows = [];
+  for (let i = 0; i < Number(count || 0); i++) {
+    const row = values?.[i] || {};
+    const lineNo = row.lineNo || incrementLineLabel(firstLineNo || "1", i);
+    rows.push(`
+      <div class="list-row">
+        <div class="line-no">${escapeHtml(lineNo)}</div>
+        <div>
+          <input class="measure-input" data-wave="${wave}" data-side="${side}" data-index="${i}" data-line-no="${escapeHtml(lineNo)}" type="number" inputmode="decimal" step="0.01" min="0" value="${escapeHtml(row.value ?? "")}" placeholder="測定値 dB">
+        </div>
+        <div><span class="badge pending" data-result="${wave}-${side}-${i}">未判定</span></div>
+        <div class="memo-cell">
+          <input class="line-memo-input" data-wave="${wave}" data-side="${side}" data-index="${i}" data-line-no="${escapeHtml(lineNo)}" type="text" value="${escapeHtml(row.memo ?? "")}" placeholder="メモ">
+        </div>
+      </div>
+    `);
   }
+
+  return `
+    <section class="side-list">
+      <div class="side-list-head">
+        <span>${escapeHtml(title)}</span>
+        <span>${calibrationLabel}：${formatCalibrationDisplay(calibration)} dB</span>
+      </div>
+      ${rows.join("")}
+    </section>
+  `;
 }
 
-function updateEntryDirectionVisibility() {
-  // 旧版互換用。現在は入力結果一覧方式のため使用しない。
+function renderLiveSummary() {
+  const target = $("liveSummaryList");
+  if (!target) return;
+
+  if (!isRestoringDraft) collectWaveInputs();
+  const waves = latestCalculation?.wavelengths || getSelectedWavelengths();
+
+  target.innerHTML = waves.map((wave) => renderWaveLiveSummary(wave)).join("");
 }
 
-function getLineConfig() {
-  const startCoreCount = Math.max(1, Math.min(288, Math.floor(Number($("startCoreCount").value || 1))));
-  const endCoreCount = Math.max(1, Math.min(288, Math.floor(Number($("endCoreCount").value || startCoreCount))));
-  const rowCount = Math.max(startCoreCount, endCoreCount);
-
-  return {
-    measurementMode: $("measurementMode").value,
-    startCoreCount,
-    endCoreCount,
-    rowCount,
-    startFirstLineNo: $("startFirstLineNo").value.trim() || "1",
-    endFirstLineNo: $("endFirstLineNo").value.trim() || "1"
-  };
+function renderWaveLiveSummary(wave) {
+  const d = ensureWave(wave);
+  const standard = latestCalculation?.results?.[wave]?.displayStandardValue || "";
+  return `
+    <section class="wave-measure-card">
+      <div class="wave-title">
+        <strong>${wave}nm 入力結果一覧</strong>
+        <span class="hint">規格値：${standard ? standard + " dB" : "未計算"}</span>
+      </div>
+      ${renderSideSummary(wave, "start", "始端側 → 遠端側", d.startCoreCount, d.startFirstLineNo, d.startCalibration, d.startValues)}
+      ${renderSideSummary(wave, "end", "遠端側 → 始端側", d.endCoreCount, d.endFirstLineNo, d.endCalibration, d.endValues)}
+    </section>
+  `;
 }
 
-function incrementLineLabel(baseLabel, offset) {
-  const text = String(baseLabel || "").trim();
-  if (text === "") return "";
+function renderSideSummary(wave, side, title, count, firstLineNo, calibration, values) {
+  const calibrationLabel = side === "start" ? "始点校正値" : "終点校正値";
+  const standard = latestCalculation?.results?.[wave]?.standardValue;
+  const standardDisplay = latestCalculation?.results?.[wave]?.displayStandardValue || "";
+  const rows = [];
 
-  const pureNumber = Number(text);
-  if (Number.isFinite(pureNumber) && /^-?\d+$/.test(text)) {
-    return String(pureNumber + offset);
+  for (let i = 0; i < Number(count || 0); i++) {
+    const row = values?.[i] || {};
+    const lineNo = row.lineNo || incrementLineLabel(firstLineNo || "1", i);
+    const result = getResultForValue(row.value, standard);
+    rows.push(`
+      <div class="list-row">
+        <div class="line-no">${escapeHtml(lineNo)}</div>
+        <div>${formatMeasuredValue(row.value)} dB</div>
+        <div class="standard-cell">${standardDisplay ? standardDisplay + " dB" : ""}</div>
+        <div><span class="badge ${resultClass(result)}">${escapeHtml(result)}</span></div>
+        <div class="cal-cell">${calibrationLabel}：${formatCalibrationDisplay(calibration)} dB</div>
+        <div class="memo-cell">${escapeHtml(row.memo || "")}</div>
+      </div>
+    `);
   }
 
-  const match = text.match(/^(.*?)(\d+)$/);
-  if (!match) {
-    return offset === 0 ? text : `${text}+${offset}`;
-  }
-
-  const prefix = match[1];
-  const numText = match[2];
-  const nextNum = String(Number(numText) + offset).padStart(numText.length, "0");
-  return `${prefix}${nextNum}`;
-}
-
-
-function updateCableMode() {
-  const cableType = $("cableType").value;
-  const wavelengthSelect = $("wavelength");
-  wavelengthSelect.innerHTML = "";
-
-  const wavelengths = Object.keys(normalStandards[cableType].wavelengths);
-
-  wavelengthSelect.innerHTML = [
-    ...wavelengths.map((w) => `<option value="${w}">${w}nm</option>`),
-    `<option value="both">両波長（${wavelengths.join("nm / ")}nm）</option>`
-  ].join("");
-}
-
-function getNumber(id, label, { required = true, min = null } = {}) {
-  const raw = $(id).value;
-  if (raw === "" || raw === null) {
-    if (required) throw new Error(`${label}を入力してください。`);
-    return null;
-  }
-  const value = Number(raw);
-  if (!Number.isFinite(value)) throw new Error(`${label}は数値で入力してください。`);
-  if (min !== null && value < min) throw new Error(`${label}は${min}以上で入力してください。`);
-  return value;
-}
-
-function getBaseInput() {
-  const startLm = getNumber("startLm", "始端LM", { min: 0 });
-  const endLm = getNumber("endLm", "遠端LM", { min: 0 });
-  const spliceCount = getNumber("spliceCount", "融着点数", { min: 0 });
-  const connectorCount = getNumber("connectorCount", "コネクタ数", { min: 0 });
-  const startCoreCount = getNumber("startCoreCount", "始端側芯数", { min: 1 });
-  const endCoreCount = getNumber("endCoreCount", "遠端側芯数", { min: 1 });
-  const rowCount = Math.max(Math.floor(startCoreCount), Math.floor(endCoreCount));
-
-  return {
-    siteName: $("siteName").value.trim(),
-    sectionName: $("sectionName").value.trim(),
-    startPanel: $("startPanel").value.trim(),
-    endPanel: $("endPanel").value.trim(),
-    startLm,
-    endLm,
-    lengthM: Math.abs(endLm - startLm),
-    lengthKm: Math.abs(endLm - startLm) / 1000,
-    cableType: $("cableType").value,
-    spliceCount,
-    connectorCount,
-    startCoreCount: Math.floor(startCoreCount),
-    endCoreCount: Math.floor(endCoreCount),
-    rowCount,
-    measurementMode: $("measurementMode").value,
-    startFirstLineNo: $("startFirstLineNo").value.trim() || "1",
-    endFirstLineNo: $("endFirstLineNo").value.trim() || "1",
-    memo: $("memo").value.trim()
-  };
+  return `
+    <section class="side-list summary-list">
+      <div class="side-list-head">
+        <span>${escapeHtml(title)}</span>
+        <span>${calibrationLabel}：${formatCalibrationDisplay(calibration)} dB</span>
+      </div>
+      ${rows.join("") || '<div class="list-row">未入力</div>'}
+    </section>
+  `;
 }
 
 function handleCalculate() {
   try {
-    const input = getBaseInput();
-    const calculation = calculateNormal(input);
-
-    latestCalculation = {
-      ...input,
-      ...calculation
-    };
-
-    generateCoreInputs(true);
+    collectWaveInputs();
+    formatAllCalibrationInputs();
+    latestCalculation = calculateSmgi(getBaseInput());
+    renderMeasurements(true);
     renderCalculation(latestCalculation);
-    updateCoreJudgements();
+    updateJudgements();
+    renderLiveSummary();
+    saveDraftSoon();
   } catch (error) {
     latestCalculation = null;
     renderError(error.message);
   }
 }
 
-function calculateNormal(input) {
-  const selectedWavelengths = getActiveWavelengths(input.cableType);
-  const standardValues = {};
-  const displayStandardValues = {};
-  const coefficientsByWavelength = {};
-  const componentsByWavelength = {};
+function getBaseInput() {
+  const workNo = validateWorkNo();
+  const startLm = getNumber("startLm", "始端レングスマーク");
+  const endLm = getNumber("endLm", "遠端レングスマーク");
+  const lengthM = Math.abs(endLm - startLm);
+  if (lengthM <= 0) throw new Error("始端と遠端のレングスマークに差がありません。");
 
-  selectedWavelengths.forEach((wavelength) => {
-    const standard = normalStandards[input.cableType].wavelengths[wavelength];
+  return {
+    workNo,
+    workNoDisplay: formatWorkNo(workNo),
+    siteName: $("siteName").value.trim(),
+    sectionName: $("sectionName").value.trim(),
+    startPanel: $("startPanel").value.trim(),
+    endPanel: $("endPanel").value.trim(),
+    startLm,
+    endLm,
+    lengthM,
+    lengthKm: lengthM / 1000,
+    cableType: $("cableType").value,
+    wavelengths: getSelectedWavelengths(),
+    spliceCount: Math.floor(getNumber("spliceCount", "融着点数", 0)),
+    connectorCount: Math.floor(getNumber("connectorCount", "コネクタ数", 0)),
+    memo: $("memo").value.trim(),
+    waveSettings: getWaveSettings()
+  };
+}
 
-    const cableLossValue = input.lengthKm * standard.cableLoss;
-    const spliceLossValue = input.spliceCount * standard.spliceLoss;
-    const connectorLossValue = input.connectorCount * standard.connectorLoss;
-    const rawStandardValue = cableLossValue + spliceLossValue + connectorLossValue;
-    const standardValue = Number(rawStandardValue.toFixed(2));
+function getWaveSettings() {
+  collectWaveInputs();
+  const settings = {};
+  getSelectedWavelengths().forEach((wave) => {
+    const d = ensureWave(wave);
+    settings[String(wave)] = {
+      startCalibration: toNullableNumber(d.startCalibration),
+      endCalibration: toNullableNumber(d.endCalibration),
+      startCoreCount: Number(d.startCoreCount || 0),
+      endCoreCount: Number(d.endCoreCount || 0),
+      startFirstLineNo: d.startFirstLineNo || "1",
+      endFirstLineNo: d.endFirstLineNo || "1"
+    };
+  });
+  return settings;
+}
 
-    standardValues[wavelength] = standardValue;
-    displayStandardValues[wavelength] = standardValue.toFixed(2);
-    coefficientsByWavelength[wavelength] = { ...standard };
-    componentsByWavelength[wavelength] = {
+function calculateSmgi(input) {
+  const results = {};
+  input.wavelengths.forEach((wave) => {
+    const master = smgiMaster[input.cableType].wavelengths[wave];
+    const cableLossValue = input.lengthKm * master.cableLoss;
+    const spliceLossValue = input.spliceCount * master.spliceLoss;
+    const connectorLossValue = input.connectorCount * master.connectorLoss;
+    const standardValue = cableLossValue + spliceLossValue + connectorLossValue;
+    results[String(wave)] = {
+      wavelength: wave,
+      cableLoss: master.cableLoss,
+      spliceLoss: master.spliceLoss,
+      connectorLoss: master.connectorLoss,
       cableLossValue,
       spliceLossValue,
       connectorLossValue,
-      rawStandardValue
+      standardValue,
+      displayStandardValue: standardValue.toFixed(2)
     };
   });
-
-  const primaryWavelength = selectedWavelengths[0];
-  const isDualWavelength = selectedWavelengths.length > 1;
-
-  return {
-    formulaType: "normal",
-    wavelength: isDualWavelength ? "both" : primaryWavelength,
-    wavelengths: selectedWavelengths,
-    wavelengthLabel: formatWavelengthLabel(selectedWavelengths),
-    standardName: "",
-    standardValue: standardValues[primaryWavelength],
-    standardValues,
-    displayStandardValue: isDualWavelength
-      ? selectedWavelengths.map((w) => `${w}nm ${displayStandardValues[w]}dB`).join(" / ")
-      : displayStandardValues[primaryWavelength],
-    displayStandardValues,
-    unitDisplayDecimals: 2,
-    coefficients: coefficientsByWavelength[primaryWavelength],
-    coefficientsByWavelength,
-    components: componentsByWavelength[primaryWavelength],
-    componentsByWavelength,
-    warning: ""
-  };
-}
-
-function calculateSi(input) {
-  const standardName = $("siStandard").value;
-  const standard = siStandards[standardName];
-
-  let af;
-  let rawStandardValue;
-
-  if (standard.formulaType === "af_plus_fixed") {
-    af = input.lengthKm * standard.cableLoss;
-    rawStandardValue = af + standard.fixedLoss;
-  } else if (standard.formulaType === "cf_press_piecewise") {
-    if (input.lengthKm > 1) {
-      throw new Error("CF系(圧着)は1kmを超えるため計算範囲外です");
-    }
-
-    if (input.lengthKm <= 0.1) {
-      af = 1.1;
-    } else {
-      af = (7 - 4 * Math.log10(input.lengthKm)) * input.lengthKm;
-    }
-    rawStandardValue = af + standard.fixedLoss;
-  } else {
-    throw new Error("未対応のSI計算方式です。");
-  }
-
-  const standardValue = truncateTo1Decimal(rawStandardValue);
-
-  return {
-    formulaType: standard.formulaType,
-    wavelength: standard.wavelength,
-    standardName,
-    standardValue,
-    rawStandardValue,
-    displayStandardValue: standardValue.toFixed(1),
-    unitDisplayDecimals: 1,
-    coefficients: { ...standard },
-    components: {
-      af,
-      fixedLoss: standard.fixedLoss,
-      cableLoss: standard.cableLoss ?? null
-    },
-    warning: ""
-  };
-}
-
-function truncateTo1Decimal(value) {
-  return Math.floor(value * 10) / 10;
+  return { ...input, results };
 }
 
 function renderCalculation(calc) {
-  $("resultCard").classList.remove("hidden");
-  $("coresCard").classList.remove("hidden");
   $("errorBox").classList.add("hidden");
   $("errorBox").textContent = "";
-
-  const standardValueHtml = (calc.wavelengths || [calc.wavelength]).map((wavelength) => {
-    const displayValue = calc.displayStandardValues?.[wavelength] || calc.displayStandardValue;
-    return `<div class="standard-line"><strong>${wavelength}nm</strong><span>${displayValue} dB</span></div>`;
-  }).join("");
+  $("resultCard").classList.remove("hidden");
 
   $("resultSummary").innerHTML = `
     <div class="result-main">
-      <div>
-        <div class="result-label">規格値</div>
-        <div class="small">${escapeHtml(calc.cableType)} / ${escapeHtml(calc.wavelengthLabel || String(calc.wavelength) + "nm")}</div>
-      </div>
-      <div class="result-value multi-standard">${standardValueHtml}</div>
+      ${calc.wavelengths.map((wave) => `
+        <div class="result-box">
+          <div class="result-label">${escapeHtml(calc.cableType)} ${wave}nm 規格値</div>
+          <div class="result-value">${escapeHtml(calc.results[String(wave)].displayStandardValue)} dB</div>
+        </div>
+      `).join("")}
     </div>
   `;
 
   const rows = [
+    ["工事番号", calc.workNoDisplay],
     ["ケーブル長", `${formatNumber(calc.lengthM, 3)} m / ${formatNumber(calc.lengthKm, 6)} km`],
-    ["計算方式", "通常計算"]
+    ["ケーブル種類", calc.cableType],
+    ["波長", calc.wavelengths.map((w) => `${w}nm`).join(" / ")],
+    ["融着点数", `${calc.spliceCount}点`],
+    ["コネクタ数", `${calc.connectorCount}個`],
+    ["計算式", "ケーブル長(km)×ケーブル損失 + 融着点数×0.15 + コネクタ数×0.35"],
+    ["小数処理", "規格値・測定値・校正値は小数第2位表示"]
   ];
 
-  (calc.wavelengths || [calc.wavelength]).forEach((wavelength) => {
-    const components = calc.componentsByWavelength?.[wavelength] || calc.components;
-    rows.push([`${wavelength}nm ケーブル損失`, `${formatNumber(components.cableLossValue, 6)} dB`]);
-    rows.push([`${wavelength}nm 融着損失`, `${formatNumber(components.spliceLossValue, 6)} dB`]);
-    rows.push([`${wavelength}nm コネクタ損失`, `${formatNumber(components.connectorLossValue, 6)} dB`]);
+  calc.wavelengths.forEach((wave) => {
+    const r = calc.results[String(wave)];
+    const s = calc.waveSettings[String(wave)];
+    rows.push([`${wave}nm 校正値`, `始点 ${formatCalibrationDisplay(s.startCalibration)} dB / 終点 ${formatCalibrationDisplay(s.endCalibration)} dB（記録用のみ）`]);
+    rows.push([`${wave}nm 芯線数`, `始端 ${s.startCoreCount}芯 / 遠端 ${s.endCoreCount}芯`]);
+    rows.push([`${wave}nm 内訳`, `ケーブル ${formatNumber(r.cableLossValue, 6)} + 融着 ${formatNumber(r.spliceLossValue, 6)} + コネクタ ${formatNumber(r.connectorLossValue, 6)} = ${r.displayStandardValue} dB`]);
   });
 
-  $("detailBreakdown").innerHTML = rows
-    .map(([label, value]) => `
-      <div class="breakdown-row">
-        <strong>${escapeHtml(label)}</strong>
-        <span>${escapeHtml(value)}</span>
-      </div>
-    `)
-    .join("");
-
-  updateCoreJudgements();
+  $("detailBreakdown").innerHTML = rows.map(([label, value]) => `
+    <div class="breakdown-row">
+      <strong>${escapeHtml(label)}</strong>
+      <span>${escapeHtml(String(value))}</span>
+    </div>
+  `).join("");
 }
 
 function renderError(message) {
-  $("resultCard").classList.remove("hidden");
-  $("coresCard").classList.add("hidden");
   $("errorBox").classList.remove("hidden");
   $("errorBox").textContent = message;
-  $("resultSummary").innerHTML = "";
-  $("detailBreakdown").innerHTML = "";
+  $("resultCard").classList.add("hidden");
 }
 
-function clearResultOnly() {
+function clearCalculationOnly() {
   latestCalculation = null;
   $("resultCard").classList.add("hidden");
-
-  // 測定値入力欄は消さない。
-  // 条件変更後は規格値が未計算になるため、判定表示だけ未判定に戻す。
-  document.querySelectorAll(".badge[data-result]").forEach((badge) => {
+  document.querySelectorAll("[data-result]").forEach((badge) => {
     badge.className = "badge pending";
     badge.textContent = "未判定";
   });
+  renderLiveSummary();
 }
 
-
-function mergeCoreRows(baseRows = [], updateRows = []) {
-  const map = new Map();
-
-  baseRows.forEach((row) => {
-    if (!row || !row.coreNo) return;
-    map.set(Number(row.coreNo), { ...row });
+function updateJudgements() {
+  const scope = $("measureInputArea") || document;
+  scope.querySelectorAll("[data-result]").forEach((badge) => {
+    const [wave, side, index] = badge.dataset.result.split("-");
+    const standard = latestCalculation?.results?.[wave]?.standardValue;
+    const input = scope.querySelector(`.measure-input[data-wave="${wave}"][data-side="${side}"][data-index="${index}"]`);
+    const result = getResultForValue(input?.value, standard);
+    badge.className = `badge ${resultClass(result)}`;
+    badge.textContent = result;
   });
-
-  updateRows.forEach((row) => {
-    if (!row || !row.coreNo) return;
-    const coreNo = Number(row.coreNo);
-    const existing = map.get(coreNo) || {};
-    map.set(coreNo, { ...existing, ...row });
-  });
-
-  return Array.from(map.values()).sort((a, b) => Number(a.coreNo) - Number(b.coreNo));
 }
 
-function rememberCurrentCoreRows() {
-  const currentRows = collectCoreFormRows();
-  measurementDraftRows = mergeCoreRows(measurementDraftRows, currentRows);
-}
+function collectMeasuredData() {
+  collectWaveInputs();
+  const out = {};
+  const waves = latestCalculation?.wavelengths || getSelectedWavelengths();
 
-function clearMeasurementDraftRows() {
-  measurementDraftRows = [];
-}
+  waves.forEach((wave) => {
+    const key = String(wave);
+    const d = ensureWave(key);
+    const standard = latestCalculation?.results?.[key]?.standardValue;
 
-function getDraftRow(coreNo, fallbackRows = []) {
-  const draft = measurementDraftRows.find((row) => Number(row.coreNo) === Number(coreNo));
-  if (draft) return draft;
-
-  return fallbackRows.find((row) => Number(row.coreNo) === Number(coreNo)) || {};
-}
-
-
-function getActiveWavelengths(cableType = $("cableType").value) {
-  const selected = $("wavelength").value;
-  const wavelengths = Object.keys(normalStandards[cableType].wavelengths).map(Number);
-
-  if (selected === "both") {
-    return wavelengths;
-  }
-
-  const single = Number(selected || wavelengths[0]);
-  return [single];
-}
-
-function formatWavelengthLabel(wavelengths) {
-  return (wavelengths || []).map((w) => `${w}nm`).join(" / ");
-}
-
-function normalizeRecordWavelengths(recordOrCalc) {
-  if (Array.isArray(recordOrCalc?.wavelengths) && recordOrCalc.wavelengths.length > 0) {
-    return recordOrCalc.wavelengths.map(Number);
-  }
-
-  if (recordOrCalc?.wavelength === "both" && recordOrCalc?.cableType && normalStandards[recordOrCalc.cableType]) {
-    return Object.keys(normalStandards[recordOrCalc.cableType].wavelengths).map(Number);
-  }
-
-  if (recordOrCalc?.wavelength !== undefined && recordOrCalc?.wavelength !== null && recordOrCalc.wavelength !== "") {
-    return [Number(recordOrCalc.wavelength)];
-  }
-
-  return getActiveWavelengths();
-}
-
-function getStandardValueForWavelength(wavelength) {
-  const key = String(wavelength);
-
-  if (latestCalculation?.standardValues && latestCalculation.standardValues[key] !== undefined) {
-    return latestCalculation.standardValues[key];
-  }
-
-  return latestCalculation?.standardValue;
-}
-
-function getDraftMeasurements(row, direction) {
-  const objectKey = direction === "forward" ? "forwardMeasurements" : "reverseMeasurements";
-  const legacyKey = direction === "forward" ? "forwardMeasuredValue" : "reverseMeasuredValue";
-
-  if (row?.[objectKey] && typeof row[objectKey] === "object") {
-    return { ...row[objectKey] };
-  }
-
-  if (row?.[legacyKey] !== undefined && row[legacyKey] !== "") {
-    const firstWavelength = getActiveWavelengths()[0];
-    return { [firstWavelength]: row[legacyKey] };
-  }
-
-  return {};
-}
-
-function getCoreMeasurementObject(core, direction, wavelength) {
-  const objectKey = direction === "forward" ? "forwardMeasurements" : "reverseMeasurements";
-  const legacyValueKey = direction === "forward" ? "forwardMeasuredValue" : "reverseMeasuredValue";
-  const legacyResultKey = direction === "forward" ? "forwardResult" : "reverseResult";
-
-  if (core?.[objectKey] && core[objectKey][wavelength]) {
-    return core[objectKey][wavelength];
-  }
-
-  if (core?.[objectKey] && core[objectKey][String(wavelength)]) {
-    return core[objectKey][String(wavelength)];
-  }
-
-  if (core?.[legacyValueKey] !== undefined) {
-    return {
-      value: core[legacyValueKey],
-      result: core[legacyResultKey] || ""
+    out[key] = {
+      startCalibration: toNullableNumber(d.startCalibration),
+      endCalibration: toNullableNumber(d.endCalibration),
+      startCoreCount: Number(d.startCoreCount || 0),
+      endCoreCount: Number(d.endCoreCount || 0),
+      startFirstLineNo: d.startFirstLineNo || "1",
+      endFirstLineNo: d.endFirstLineNo || "1",
+      startValues: normalizeSideValues(d.startValues, d.startCoreCount, d.startFirstLineNo, standard),
+      endValues: normalizeSideValues(d.endValues, d.endCoreCount, d.endFirstLineNo, standard)
     };
-  }
+  });
 
-  return {
-    value: null,
-    result: ""
-  };
+  return out;
 }
 
-function renderWaveSideRow(row, side, wavelength) {
-  const isStart = side === "start";
-  const hasSide = isStart ? row.hasStartSide : row.hasEndSide;
-  const direction = isStart ? "forward" : "reverse";
-  const lineInputClass = isStart ? "line-start-input" : "line-end-input";
-  const lineLabel = isStart ? "始端側線番" : "遠端側線番";
-  const valueLabel = isStart ? "始端側測定値 dB" : "遠端側測定値 dB";
-  const lineValue = isStart ? row.startLineNo : row.endLineNo;
-  const measurements = isStart ? row.forwardMeasurements : row.reverseMeasurements;
-  const measurementValue = measurements?.[wavelength] ?? measurements?.[String(wavelength)] ?? "";
-
-  if (!hasSide) {
-    return `
-      <div class="wave-side-row disabled-side-row" data-core="${row.coreNo}" data-side="${side}" data-wavelength="${wavelength}">
-        <div class="side-row-no">${row.coreNo}</div>
-        <div class="disabled-text">対象外</div>
-        <div class="disabled-text">対象外</div>
-        <div class="badge pending">未判定</div>
-      </div>
-    `;
-  }
-
-  return `
-    <div class="wave-side-row" data-core="${row.coreNo}" data-side="${side}" data-wavelength="${wavelength}">
-      <div class="side-row-no">${row.coreNo}</div>
-      <input class="${lineInputClass}" type="text" inputmode="text" placeholder="${lineLabel}" data-core="${row.coreNo}" value="${escapeHtml(lineValue)}">
-      <input class="measured-input" type="number" inputmode="decimal" step="0.001" min="0" placeholder="${valueLabel}" data-core="${row.coreNo}" data-direction="${direction}" data-wavelength="${wavelength}" value="${escapeHtml(measurementValue)}">
-      <span class="badge pending" data-result="${row.coreNo}-${direction}-${wavelength}">未判定</span>
-    </div>
-  `;
-}
-
-function renderWavelengthGroup(wavelength, rows, showStartSide, showEndSide) {
-  const startSection = showStartSide ? `
-    <div class="wave-side-block">
-      <h4>始端側測定入力</h4>
-      <div class="wave-side-header">
-        <div>行</div>
-        <div>始端側線番</div>
-        <div>始端側測定値</div>
-        <div>判定</div>
-      </div>
-      ${rows.map((row) => renderWaveSideRow(row, "start", wavelength)).join("")}
-    </div>
-  ` : "";
-
-  const endSection = showEndSide ? `
-    <div class="wave-side-block">
-      <h4>遠端側測定入力</h4>
-      <div class="wave-side-header">
-        <div>行</div>
-        <div>遠端側線番</div>
-        <div>遠端側測定値</div>
-        <div>判定</div>
-      </div>
-      ${rows.map((row) => renderWaveSideRow(row, "end", wavelength)).join("")}
-    </div>
-  ` : "";
-
-  return `
-    <section class="wavelength-group-card">
-      <h3>${wavelength}nm 測定入力</h3>
-      ${startSection}
-      ${endSection}
-    </section>
-  `;
-}
-
-function renderSummaryRow(i, lineMemo, wavelengths) {
-  const forwardCells = wavelengths.map((w) => `
-    <div class="summary-cell multi" data-summary="${i}-forwardValue-${w}"></div>
-    <div class="summary-cell multi" data-summary="${i}-forwardResult-${w}"></div>
-  `).join("");
-
-  const reverseCells = wavelengths.map((w) => `
-    <div class="summary-cell multi" data-summary="${i}-reverseValue-${w}"></div>
-    <div class="summary-cell multi" data-summary="${i}-reverseResult-${w}"></div>
-  `).join("");
-
-  return `
-    <div class="measurement-summary-row" data-summary-core="${i}" style="--wave-count:${wavelengths.length}">
-      <div class="summary-no">${i}</div>
-      <div class="summary-cell" data-summary="${i}-startLine"></div>
-      ${forwardCells}
-      <div class="summary-cell" data-summary="${i}-endLine"></div>
-      ${reverseCells}
-      <input class="line-memo-input" type="text" placeholder="メモ" data-core="${i}" value="${escapeHtml(lineMemo)}">
-    </div>
-  `;
-}
-
-function generateCoreInputs(keepValues = false) {
-  const container = $("coreInputs");
-
-  if (keepValues) {
-    rememberCurrentCoreRows();
-  } else {
-    clearMeasurementDraftRows();
-  }
-
-  const oldRows = keepValues ? measurementDraftRows : [];
-  const config = getLineConfig();
-  const wavelengths = getActiveWavelengths();
-
-  const showStartSide = config.measurementMode === "both" || config.measurementMode === "forward";
-  const showEndSide = config.measurementMode === "both" || config.measurementMode === "reverse";
-
+function normalizeSideValues(values, count, firstLineNo, standard) {
   const rows = [];
-
-  for (let i = 1; i <= config.rowCount; i++) {
-    const old = getDraftRow(i, oldRows);
+  for (let i = 0; i < Number(count || 0); i++) {
+    const row = values?.[i] || {};
+    const value = toNullableNumber(row.value);
     rows.push({
-      coreNo: i,
-      hasStartSide: i <= config.startCoreCount,
-      hasEndSide: i <= config.endCoreCount,
-      startLineNo: old.startLineNo ?? (i <= config.startCoreCount ? incrementLineLabel(config.startFirstLineNo, i - 1) : ""),
-      endLineNo: old.endLineNo ?? (i <= config.endCoreCount ? incrementLineLabel(config.endFirstLineNo, i - 1) : ""),
-      forwardMeasurements: getDraftMeasurements(old, "forward"),
-      reverseMeasurements: getDraftMeasurements(old, "reverse"),
-      lineMemo: old.lineMemo ?? ""
+      lineNo: row.lineNo || incrementLineLabel(firstLineNo || "1", i),
+      value,
+      result: getResultForValue(value, standard),
+      memo: row.memo || ""
     });
   }
-
-  const wavelengthGroups = wavelengths
-    .map((wavelength) => renderWavelengthGroup(wavelength, rows, showStartSide, showEndSide))
-    .join("");
-
-  const forwardHeader = wavelengths.map((w) => `
-    <div>始端 ${w}nm</div>
-    <div>判定</div>
-  `).join("");
-
-  const reverseHeader = wavelengths.map((w) => `
-    <div>遠端 ${w}nm</div>
-    <div>判定</div>
-  `).join("");
-
-  const summarySection = `
-    <section class="measurement-summary-card">
-      <h3>入力結果一覧</h3>
-      <div class="measurement-summary-header" style="--wave-count:${wavelengths.length}">
-        <div>行</div>
-        <div>始端側線番</div>
-        ${forwardHeader}
-        <div>遠端側線番</div>
-        ${reverseHeader}
-        <div>線番メモ</div>
-      </div>
-      ${rows.map((row) => renderSummaryRow(row.coreNo, row.lineMemo, wavelengths)).join("")}
-    </section>
-  `;
-
-  container.innerHTML = `
-    <div class="measurement-entry-layout">
-      ${wavelengthGroups}
-      ${summarySection}
-    </div>
-  `;
-
-  container.querySelectorAll(".measured-input").forEach((input) => {
-    input.addEventListener("input", updateCoreJudgements);
-    input.addEventListener("blur", () => {
-      formatMeasuredInput(input);
-      updateCoreJudgements();
-    });
-  });
-
-  container.querySelectorAll(".line-start-input, .line-end-input, .line-memo-input").forEach((input) => {
-    input.addEventListener("input", updateMeasurementSummary);
-  });
-
-  updateCoreJudgements();
-  updateMeasurementSummary();
-}
-
-function collectCoreFormRows() {
-  const summaryRows = Array.from(document.querySelectorAll(".measurement-summary-row"));
-
-  return summaryRows.map((row) => {
-    const coreNo = Number(row.dataset.summaryCore);
-    const forwardMeasurements = {};
-    const reverseMeasurements = {};
-
-    document.querySelectorAll(`.measured-input[data-core="${coreNo}"][data-direction="forward"]`).forEach((input) => {
-      forwardMeasurements[input.dataset.wavelength] = input.value ?? "";
-    });
-
-    document.querySelectorAll(`.measured-input[data-core="${coreNo}"][data-direction="reverse"]`).forEach((input) => {
-      reverseMeasurements[input.dataset.wavelength] = input.value ?? "";
-    });
-
-    return {
-      coreNo,
-      startLineNo: document.querySelector(`.line-start-input[data-core="${coreNo}"]`)?.value ?? "",
-      endLineNo: document.querySelector(`.line-end-input[data-core="${coreNo}"]`)?.value ?? "",
-      forwardMeasurements,
-      reverseMeasurements,
-      lineMemo: row.querySelector(".line-memo-input")?.value ?? ""
-    };
-  });
-}
-
-function updateCoreJudgements() {
-  if (!latestCalculation) {
-    updateMeasurementSummary();
-    return;
-  }
-
-  document.querySelectorAll(".measured-input").forEach((input) => {
-    const core = input.dataset.core;
-    const direction = input.dataset.direction;
-    const wavelength = input.dataset.wavelength;
-    const resultEl = document.querySelector(`[data-result="${core}-${direction}-${wavelength}"]`);
-    const raw = input.value;
-
-    if (!resultEl) return;
-
-    resultEl.className = "badge pending";
-    resultEl.textContent = "未判定";
-
-    if (raw === "") {
-      updateMeasurementSummary();
-      return;
-    }
-
-    const measured = Number(raw);
-    if (!Number.isFinite(measured)) {
-      updateMeasurementSummary();
-      return;
-    }
-
-    const standardValue = getStandardValueForWavelength(wavelength);
-
-    if (measured <= standardValue) {
-      resultEl.className = "badge ok";
-      resultEl.textContent = "OK";
-    } else {
-      resultEl.className = "badge ng";
-      resultEl.textContent = "NG";
-    }
-  });
-
-  updateMeasurementSummary();
-}
-
-function resultBadgeHtml(result) {
-  if (!result) return "";
-  const className = getResultBadgeClass(result);
-  return `<span class="badge ${className}">${escapeHtml(result)}</span>`;
-}
-
-function updateMeasurementSummary() {
-  const wavelengths = latestCalculation?.wavelengths || getActiveWavelengths();
-
-  document.querySelectorAll(".measurement-summary-row").forEach((row) => {
-    const coreNo = row.dataset.summaryCore;
-
-    const startLine = document.querySelector(`.line-start-input[data-core="${coreNo}"]`)?.value || "";
-    const endLine = document.querySelector(`.line-end-input[data-core="${coreNo}"]`)?.value || "";
-
-    const setText = (key, value) => {
-      const el = document.querySelector(`[data-summary="${coreNo}-${key}"]`);
-      if (el) {
-        el.textContent = value;
-        el.classList.remove("summary-result-ok", "summary-result-ng", "summary-result-pending");
-      }
-    };
-
-    const setResult = (key, result, hasValue) => {
-      const el = document.querySelector(`[data-summary="${coreNo}-${key}"]`);
-      if (!el) return;
-
-      el.classList.remove("summary-result-ok", "summary-result-ng", "summary-result-pending");
-      el.innerHTML = "";
-
-      if (!hasValue) return;
-
-      el.innerHTML = resultBadgeHtml(result);
-      if (result === "OK") el.classList.add("summary-result-ok");
-      if (result === "NG") el.classList.add("summary-result-ng");
-      if (result === "未判定") el.classList.add("summary-result-pending");
-    };
-
-    setText("startLine", startLine);
-    setText("endLine", endLine);
-
-    wavelengths.forEach((wavelength) => {
-      const forwardInput = document.querySelector(`.measured-input[data-core="${coreNo}"][data-direction="forward"][data-wavelength="${wavelength}"]`);
-      const reverseInput = document.querySelector(`.measured-input[data-core="${coreNo}"][data-direction="reverse"][data-wavelength="${wavelength}"]`);
-      const forwardResult = document.querySelector(`[data-result="${coreNo}-forward-${wavelength}"]`)?.textContent || "";
-      const reverseResult = document.querySelector(`[data-result="${coreNo}-reverse-${wavelength}"]`)?.textContent || "";
-
-      const forwardValue = forwardInput ? formatMeasuredInputValue(forwardInput.value) : "";
-      const reverseValue = reverseInput ? formatMeasuredInputValue(reverseInput.value) : "";
-
-      setText(`forwardValue-${wavelength}`, forwardValue);
-      setResult(`forwardResult-${wavelength}`, forwardResult, Boolean(forwardValue));
-      setText(`reverseValue-${wavelength}`, reverseValue);
-      setResult(`reverseResult-${wavelength}`, reverseResult, Boolean(reverseValue));
-    });
-  });
-}
-
-function judgeMeasuredValue(value, wavelength) {
-  if (!latestCalculation) return "未判定";
-  if (value === null || !Number.isFinite(value)) return "未判定";
-  return value <= getStandardValueForWavelength(wavelength) ? "OK" : "NG";
-}
-
-function toNullableNumber(raw) {
-  if (raw === "" || raw === null || raw === undefined) return null;
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : null;
-}
-
-function collectCoreResults() {
-  if (!latestCalculation) return [];
-
-  const mode = latestCalculation.measurementMode || $("measurementMode").value;
-  const wavelengths = latestCalculation.wavelengths || getActiveWavelengths();
-
-  return Array.from(document.querySelectorAll(".measurement-summary-row")).map((row) => {
-    const coreNo = Number(row.dataset.summaryCore);
-    const forwardMeasurements = {};
-    const reverseMeasurements = {};
-
-    wavelengths.forEach((wavelength) => {
-      const forwardValue = mode === "both" || mode === "forward"
-        ? toNullableNumber(document.querySelector(`.measured-input[data-core="${coreNo}"][data-direction="forward"][data-wavelength="${wavelength}"]`)?.value)
-        : null;
-      const reverseValue = mode === "both" || mode === "reverse"
-        ? toNullableNumber(document.querySelector(`.measured-input[data-core="${coreNo}"][data-direction="reverse"][data-wavelength="${wavelength}"]`)?.value)
-        : null;
-
-      forwardMeasurements[wavelength] = {
-        value: forwardValue,
-        result: mode === "both" || mode === "forward" ? judgeMeasuredValue(forwardValue, wavelength) : ""
-      };
-
-      reverseMeasurements[wavelength] = {
-        value: reverseValue,
-        result: mode === "both" || mode === "reverse" ? judgeMeasuredValue(reverseValue, wavelength) : ""
-      };
-    });
-
-    const firstWavelength = wavelengths[0];
-
-    return {
-      coreNo,
-      startLineNo: document.querySelector(`.line-start-input[data-core="${coreNo}"]`)?.value.trim() || "",
-      endLineNo: document.querySelector(`.line-end-input[data-core="${coreNo}"]`)?.value.trim() || "",
-      measurementMode: mode,
-      forwardMeasurements,
-      reverseMeasurements,
-      forwardMeasuredValue: forwardMeasurements[firstWavelength]?.value ?? null,
-      forwardResult: forwardMeasurements[firstWavelength]?.result ?? "",
-      reverseMeasuredValue: reverseMeasurements[firstWavelength]?.value ?? null,
-      reverseResult: reverseMeasurements[firstWavelength]?.result ?? "",
-      lineMemo: row.querySelector(".line-memo-input")?.value.trim() || ""
-    };
-  });
+  return rows;
 }
 
 function handleSave() {
@@ -968,64 +652,36 @@ function handleSave() {
     return;
   }
 
-  // 保存前に測定値表示を小数第2位へ整える
-  document.querySelectorAll(".measured-input").forEach(formatMeasuredInput);
-  rememberCurrentCoreRows();
-  updateCoreJudgements();
+  document.querySelectorAll(".measure-input").forEach(formatMeasuredInput);
+  formatAllCalibrationInputs();
+  collectWaveInputs();
+
+  try {
+    latestCalculation = calculateSmgi(getBaseInput());
+  } catch (error) {
+    alert(error.message);
+    return;
+  }
 
   const records = loadRecords();
   const now = new Date();
-
-  const existing = editingRecordId
-    ? records.find((record) => record.id === editingRecordId)
-    : null;
+  const oldRecord = editingRecordId ? records.find((record) => record.id === editingRecordId) : null;
 
   const record = {
-    id: existing?.id || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())),
-    savedAt: existing?.savedAt || now.toISOString(),
+    id: oldRecord?.id || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())),
+    savedAt: oldRecord?.savedAt || now.toISOString(),
     updatedAt: editingRecordId ? now.toISOString() : "",
-    siteName: latestCalculation.siteName,
-    sectionName: latestCalculation.sectionName,
-    startPanel: latestCalculation.startPanel,
-    endPanel: latestCalculation.endPanel,
-    startLm: latestCalculation.startLm,
-    endLm: latestCalculation.endLm,
-    lengthM: latestCalculation.lengthM,
-    lengthKm: latestCalculation.lengthKm,
-    cableType: latestCalculation.cableType,
-    wavelength: latestCalculation.wavelength,
-    wavelengths: latestCalculation.wavelengths,
-    wavelengthLabel: latestCalculation.wavelengthLabel,
-    standardValues: latestCalculation.standardValues,
-    displayStandardValues: latestCalculation.displayStandardValues,
-    siStandardName: latestCalculation.standardName,
-    spliceCount: latestCalculation.spliceCount,
-    connectorCount: latestCalculation.connectorCount,
-    startCoreCount: latestCalculation.startCoreCount,
-    endCoreCount: latestCalculation.endCoreCount,
-    rowCount: latestCalculation.rowCount,
-    measurementMode: latestCalculation.measurementMode,
-    startFirstLineNo: latestCalculation.startFirstLineNo,
-    endFirstLineNo: latestCalculation.endFirstLineNo,
-    formulaType: latestCalculation.formulaType,
-    standardValue: latestCalculation.standardValue,
-    rawStandardValue: latestCalculation.rawStandardValue,
-    displayStandardValue: latestCalculation.displayStandardValue,
-    coefficients: latestCalculation.coefficients,
-    components: latestCalculation.components,
-    cores: collectCoreResults(),
-    memo: latestCalculation.memo
+    ...latestCalculation,
+    measurements: collectMeasuredData()
   };
 
   if (editingRecordId) {
     const index = records.findIndex((item) => item.id === editingRecordId);
-    if (index >= 0) {
-      records[index] = record;
-    } else {
-      records.unshift(record);
-    }
+    if (index >= 0) records[index] = record;
+    else records.unshift(record);
     saveRecords(records);
     cancelEditMode(false);
+    localStorage.removeItem(DRAFT_KEY);
     renderHistory();
     alert("履歴を更新しました。");
     return;
@@ -1033,18 +689,14 @@ function handleSave() {
 
   records.unshift(record);
   saveRecords(records);
+  localStorage.removeItem(DRAFT_KEY);
   renderHistory();
   alert("履歴に保存しました。");
 }
 
-
 function loadRecords() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); }
+  catch { return []; }
 }
 
 function saveRecords(records) {
@@ -1052,170 +704,74 @@ function saveRecords(records) {
 }
 
 function renderHistory() {
-  const list = $("historyList");
   const records = loadRecords();
+  const list = $("historyList");
 
   if (records.length === 0) {
-    list.innerHTML = `<p class="small">保存履歴はまだありません。</p>`;
+    list.innerHTML = `<p class="hint">履歴はまだありません。</p>`;
     return;
   }
 
-  list.innerHTML = "";
-
+  const groups = new Map();
   records.forEach((record) => {
-    const item = document.createElement("article");
-    item.className = "history-item";
+    const key = record.workNoDisplay || formatWorkNo(record.workNo) || "工事番号未設定";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(record);
+  });
 
-    const title = [
-      record.siteName || "現場名未入力",
-      record.sectionName || `${record.startPanel || "始端"} → ${record.endPanel || "遠端"}`
-    ].join(" / ");
-
-    const resultList = flattenCoreResults(record.cores);
-    const okCount = resultList.filter((result) => result === "OK").length;
-    const ngCount = resultList.filter((result) => result === "NG").length;
-    const pendingCount = resultList.filter((result) => result === "未判定").length;
-
-    item.innerHTML = `
-      <button class="history-toggle" type="button">
-        <div class="history-title">
-          <strong>${escapeHtml(title)}</strong>
-          <span class="history-meta">
-            ${formatDateTime(record.savedAt)} / ${escapeHtml(record.cableType)} ${escapeHtml(record.wavelengthLabel || (record.wavelengths ? formatWavelengthLabel(record.wavelengths) : String(record.wavelength) + "nm"))} /
-            規格値 ${escapeHtml(record.displayStandardValue)}dB /
-            OK ${okCount}・NG ${ngCount}・未判定 ${pendingCount}
-          </span>
+  list.innerHTML = "";
+  groups.forEach((items, groupName) => {
+    const group = document.createElement("section");
+    group.className = "history-group";
+    group.innerHTML = `<div class="history-group-title">工事番号：${escapeHtml(groupName)}（${items.length}件）</div>`;
+    items.forEach((record) => {
+      const counts = countRecordJudgements(record);
+      const item = document.createElement("article");
+      item.className = "history-item";
+      item.innerHTML = `
+        <div class="history-title">${escapeHtml(record.sectionName || "区間名なし")}</div>
+        <div class="history-meta">
+          ${formatDateTime(record.savedAt)} / ${escapeHtml(record.cableType)} ${record.wavelengths.map((w) => `${w}nm`).join(" / ")} /
+          規格値 ${record.wavelengths.map((w) => `${w}nm:${record.results[String(w)].displayStandardValue}dB`).join("、")} /
+          OK ${counts.OK} / NG ${counts.NG} / 未判定 ${counts.pending}
         </div>
-      </button>
-      <div class="history-detail">
-        ${renderHistoryDetail(record)}
-      </div>
-    `;
-
-    item.querySelector(".history-toggle").addEventListener("click", () => {
-      item.classList.toggle("open");
+        <div class="history-detail">${renderRecordDetail(record)}</div>
+      `;
+      item.querySelector(".show-report-btn").addEventListener("click", () => showRecordReport(record.id));
+      item.querySelector(".export-record-csv-btn").addEventListener("click", () => exportRecordCsv(record.id));
+      item.querySelector(".edit-record-btn").addEventListener("click", () => startEditRecord(record.id));
+      item.querySelector(".delete-record-btn").addEventListener("click", () => deleteRecord(record.id));
+      group.appendChild(item);
     });
-
-    item.querySelector(".delete-record-btn").addEventListener("click", () => {
-      deleteRecord(record.id);
-    });
-
-    item.querySelector(".edit-record-btn").addEventListener("click", () => {
-      startEditRecord(record.id);
-    });
-
-    item.querySelector(".export-record-csv-btn").addEventListener("click", () => {
-      exportRecordCsv(record.id);
-    });
-
-    list.appendChild(item);
+    list.appendChild(group);
   });
 }
 
-function getCoreDisplayValue(core, key, fallback = "") {
-  return core[key] === undefined || core[key] === null ? fallback : core[key];
-}
-
-function getResultBadgeClass(result) {
-  return result === "OK" ? "ok" : result === "NG" ? "ng" : "pending";
-}
-
-function flattenCoreResults(cores = []) {
-  return cores.flatMap((core) => {
-    // 旧データ互換
-    if (core.forwardResult === undefined && core.reverseResult === undefined && core.result !== undefined) {
-      return [core.result];
-    }
-    const results = [];
-    if (core.forwardResult) results.push(core.forwardResult);
-    if (core.reverseResult) results.push(core.reverseResult);
-    return results.length ? results : ["未判定"];
+function countRecordJudgements(record) {
+  const counts = { OK: 0, NG: 0, pending: 0 };
+  Object.values(record.measurements || {}).forEach((waveData) => {
+    [...(waveData.startValues || []), ...(waveData.endValues || [])].forEach((row) => {
+      if (row.result === "OK") counts.OK++;
+      else if (row.result === "NG") counts.NG++;
+      else counts.pending++;
+    });
   });
+  return counts;
 }
 
-function renderHistoryDetail(record) {
-  const wavelengths = normalizeRecordWavelengths(record);
-
-  const coreRows = record.cores.map((core) => {
-    const startLineNo = getCoreDisplayValue(core, "startLineNo", String(core.coreNo));
-    const endLineNo = getCoreDisplayValue(core, "endLineNo", String(core.coreNo));
-    const lineMemo = core.lineMemo || core.forwardMemo || core.reverseMemo || "";
-
-    const forwardCells = wavelengths.map((wavelength) => {
-      const measured = getCoreMeasurementObject(core, "forward", wavelength);
-      const result = measured.result || "";
-      const resultHtml = result
-        ? `<span class="badge ${getResultBadgeClass(result)}">${escapeHtml(result)}</span>`
-        : "";
-      return `
-        <td>${formatMeasuredDisplay(measured.value)}</td>
-        <td>${resultHtml}</td>
-      `;
-    }).join("");
-
-    const reverseCells = wavelengths.map((wavelength) => {
-      const measured = getCoreMeasurementObject(core, "reverse", wavelength);
-      const result = measured.result || "";
-      const resultHtml = result
-        ? `<span class="badge ${getResultBadgeClass(result)}">${escapeHtml(result)}</span>`
-        : "";
-      return `
-        <td>${formatMeasuredDisplay(measured.value)}</td>
-        <td>${resultHtml}</td>
-      `;
-    }).join("");
-
-    return `
-      <tr>
-        <td>${escapeHtml(startLineNo)}</td>
-        ${forwardCells}
-        <td>${escapeHtml(endLineNo)}</td>
-        ${reverseCells}
-        <td>${escapeHtml(lineMemo)}</td>
-      </tr>
-    `;
-  }).join("");
-
-  const forwardHeaders = wavelengths.map((w) => `
-    <th>始端側 ${w}nm</th>
-    <th>判定</th>
-  `).join("");
-
-  const reverseHeaders = wavelengths.map((w) => `
-    <th>遠端側 ${w}nm</th>
-    <th>判定</th>
-  `).join("");
-
+function renderRecordDetail(record) {
   return `
     <div class="detail-grid">
+      <div><strong>工事番号</strong><span>${escapeHtml(record.workNoDisplay || formatWorkNo(record.workNo) || "")}</span></div>
+      <div><strong>現場名</strong><span>${escapeHtml(record.siteName || "")}</span></div>
       <div><strong>始端盤名</strong><span>${escapeHtml(record.startPanel || "")}</span></div>
       <div><strong>遠端盤名</strong><span>${escapeHtml(record.endPanel || "")}</span></div>
-      <div><strong>始端LM</strong><span>${escapeHtml(String(record.startLm))} m</span></div>
-      <div><strong>遠端LM</strong><span>${escapeHtml(String(record.endLm))} m</span></div>
-      <div><strong>ケーブル長</strong><span>${formatNumber(record.lengthM, 3)} m / ${formatNumber(record.lengthKm, 6)} km</span></div>
-      <div><strong>波長</strong><span>${escapeHtml(record.wavelengthLabel || formatWavelengthLabel(wavelengths))}</span></div>
-      <div><strong>規格値</strong><span>${escapeHtml(record.displayStandardValue || "")} dB</span></div>
-      <div><strong>測定方向</strong><span>${escapeHtml(record.measurementMode || "both")}</span></div>
-      <div><strong>始端/遠端芯数</strong><span>${escapeHtml(String(record.startCoreCount || ""))} / ${escapeHtml(String(record.endCoreCount || ""))}</span></div>
-      <div><strong>融着点数</strong><span>${escapeHtml(String(record.spliceCount))}</span></div>
-      <div><strong>コネクタ数</strong><span>${escapeHtml(String(record.connectorCount))}</span></div>
-      <div><strong>メモ</strong><span>${escapeHtml(record.memo || "")}</span></div>
+      <div><strong>ケーブル長</strong><span>${formatNumber(record.lengthM, 3)}m / ${formatNumber(record.lengthKm, 6)}km</span></div>
+      <div><strong>融着 / コネクタ</strong><span>${record.spliceCount}点 / ${record.connectorCount}個</span></div>
     </div>
-    <div class="table-scroll">
-      <table class="core-table wide">
-        <thead>
-          <tr>
-            <th>始端側線番</th>
-            ${forwardHeaders}
-            <th>遠端側線番</th>
-            ${reverseHeaders}
-            <th>線番メモ</th>
-          </tr>
-        </thead>
-        <tbody>${coreRows}</tbody>
-      </table>
-    </div>
+    ${record.wavelengths.map((wave) => renderSavedWave(record, String(wave))).join("")}
     <div class="actions">
+      <button type="button" class="secondary show-report-btn">控え表示</button>
       <button type="button" class="secondary export-record-csv-btn">この履歴をCSV出力</button>
       <button type="button" class="primary edit-record-btn">この履歴を編集</button>
       <button type="button" class="danger delete-record-btn">この履歴を削除</button>
@@ -1223,304 +779,222 @@ function renderHistoryDetail(record) {
   `;
 }
 
-function startEditRecord(id) {
-  const records = loadRecords();
-  const record = records.find((item) => item.id === id);
+function renderSavedWave(record, wave) {
+  const data = record.measurements?.[wave] || {};
+  const standardDisplay = record.results?.[wave]?.displayStandardValue || "";
 
-  if (!record) {
-    alert("編集対象の履歴が見つかりません。");
-    return;
-  }
-
-  editingRecordId = id;
-  fillFormFromRecord(record);
-
-  switchScreen("calcScreen");
-
-  $("saveBtn").textContent = "履歴を更新";
-  $("cancelEditBtn").classList.remove("hidden");
-  $("coresCard").classList.remove("hidden");
-
-  alert("履歴を編集モードで開きました。修正後に「履歴を更新」を押してください。");
+  return `
+    <section class="wave-measure-card">
+      <div class="wave-title">
+        <strong>${wave}nm</strong>
+        <span class="hint">規格値：${standardDisplay} dB</span>
+      </div>
+      ${renderSavedSide("始端側 → 遠端側", "始点校正値", data.startCalibration, standardDisplay, data.startValues || [])}
+      ${renderSavedSide("遠端側 → 始端側", "終点校正値", data.endCalibration, standardDisplay, data.endValues || [])}
+    </section>
+  `;
 }
 
-function fillFormFromRecord(record) {
+function renderSavedSide(title, calLabel, calValue, standardDisplay, rows) {
+  return `
+    <section class="side-list summary-list">
+      <div class="side-list-head">
+        <span>${escapeHtml(title)}</span>
+        <span>${escapeHtml(calLabel)}：${formatCalibrationDisplay(calValue)} dB</span>
+      </div>
+      ${(rows || []).map((row) => `
+        <div class="list-row">
+          <div class="line-no">${escapeHtml(row.lineNo || "")}</div>
+          <div>${formatMeasuredValue(row.value)} dB</div>
+          <div class="standard-cell">${standardDisplay ? standardDisplay + " dB" : ""}</div>
+          <div><span class="badge ${resultClass(row.result)}">${escapeHtml(row.result || "未判定")}</span></div>
+          <div class="cal-cell">${escapeHtml(calLabel)}：${formatCalibrationDisplay(calValue)} dB</div>
+          <div class="memo-cell">${escapeHtml(row.memo || "")}</div>
+        </div>
+      `).join("") || '<div class="list-row">未入力</div>'}
+    </section>
+  `;
+}
+
+function startEditRecord(id) {
+  const record = loadRecords().find((item) => item.id === id);
+  if (!record) return;
+
+  editingRecordId = id;
+  suppressDraftSave = true;
+  isRestoringDraft = true;
+
+  $("workNo").value = record.workNo || "";
   $("siteName").value = record.siteName || "";
   $("sectionName").value = record.sectionName || "";
+  $("sectionName").dataset.manual = "true";
   $("startPanel").value = record.startPanel || "";
   $("endPanel").value = record.endPanel || "";
   $("startLm").value = record.startLm ?? "";
   $("endLm").value = record.endLm ?? "";
   $("cableType").value = record.cableType || "SM";
-  updateCableMode();
-  $("wavelength").value = Array.isArray(record.wavelengths) && record.wavelengths.length > 1
-    ? "both"
-    : String(record.wavelength || Object.keys(normalStandards[$("cableType").value].wavelengths)[0]);
-  $("spliceCount").value = record.spliceCount ?? 0;
+  updateWavelengthOptions();
+  $("wavelength").value = record.wavelengths?.length > 1 ? "both" : String(record.wavelengths?.[0] || $("wavelength").value);
+  $("spliceCount").value = record.spliceCount ?? 2;
   $("connectorCount").value = record.connectorCount ?? 2;
-  $("measurementMode").value = record.measurementMode || "both";
-  $("startCoreCount").value = record.startCoreCount || record.rowCount || record.cores?.length || 1;
-  $("endCoreCount").value = record.endCoreCount || record.startCoreCount || record.rowCount || record.cores?.length || 1;
-  $("startFirstLineNo").value = record.startFirstLineNo || record.cores?.[0]?.startLineNo || "1";
-  $("endFirstLineNo").value = record.endFirstLineNo || record.cores?.[0]?.endLineNo || "1";
   $("memo").value = record.memo || "";
-  $("endCoreCount").dataset.manual = "true";
-  $("sectionName").dataset.lastAuto = record.sectionName || "";
-  $("sectionName").dataset.manual = "true";
 
-  clearMeasurementDraftRows();
-  measurementDraftRows = (record.cores || []).map((core, index) => {
-    const coreNo = Number(core.coreNo || index + 1);
-    const wavelengths = normalizeRecordWavelengths(record);
-    const forwardMeasurements = {};
-    const reverseMeasurements = {};
+  waveDraft = normalizeRecordToWaveDraft(record);
+  latestCalculation = record;
 
-    wavelengths.forEach((wavelength) => {
-      const forward = getCoreMeasurementObject(core, "forward", wavelength);
-      const reverse = getCoreMeasurementObject(core, "reverse", wavelength);
-      forwardMeasurements[wavelength] = formatMeasuredInputValue(forward.value);
-      reverseMeasurements[wavelength] = formatMeasuredInputValue(reverse.value);
-    });
+  renderWaveConfigs(false);
+  renderMeasurementInputs();
 
-    return {
-      coreNo,
-      startLineNo: core.startLineNo ?? String(coreNo),
-      endLineNo: core.endLineNo ?? String(coreNo),
-      forwardMeasurements,
-      reverseMeasurements,
-      lineMemo: core.lineMemo || core.forwardMemo || core.reverseMemo || ""
+  isRestoringDraft = false;
+
+  renderCalculation(latestCalculation);
+  updateJudgements();
+  renderLiveSummary();
+
+  $("saveBtn").textContent = "履歴を更新";
+  $("cancelEditBtn").classList.remove("hidden");
+  switchScreen("calcScreen");
+
+  suppressDraftSave = false;
+}
+
+function normalizeRecordToWaveDraft(record) {
+  const out = {};
+  const waves = (record.wavelengths || []).map(String);
+
+  waves.forEach((wave) => {
+    const data = record.measurements?.[wave] || {};
+    const settings = record.waveSettings?.[wave] || {};
+
+    const startCoreCount = Number(data.startCoreCount ?? settings.startCoreCount ?? 4);
+    const endCoreCount = Number(data.endCoreCount ?? settings.endCoreCount ?? 4);
+    const startFirstLineNo = data.startFirstLineNo ?? settings.startFirstLineNo ?? "1";
+    const endFirstLineNo = data.endFirstLineNo ?? settings.endFirstLineNo ?? "1";
+
+    out[wave] = {
+      startCalibration: formatCalibrationInputValue(data.startCalibration ?? settings.startCalibration),
+      endCalibration: formatCalibrationInputValue(data.endCalibration ?? settings.endCalibration),
+      startCoreCount,
+      endCoreCount,
+      startFirstLineNo,
+      endFirstLineNo,
+      startValues: normalizeRecordSideValues(data.startValues || [], startCoreCount, startFirstLineNo),
+      endValues: normalizeRecordSideValues(data.endValues || [], endCoreCount, endFirstLineNo)
     };
   });
 
-  generateCoreInputs(true);
-  handleCalculate();
-  applyRecordCores(record);
-  updateCoreJudgements();
+  return out;
 }
 
-function applyRecordCores(record) {
-  if (!record.cores) return;
+function normalizeRecordSideValues(values, count, firstLineNo) {
+  const rows = [];
 
-  const wavelengths = normalizeRecordWavelengths(record);
-
-  record.cores.forEach((core, index) => {
-    const rowNumber = core.coreNo || index + 1;
-
-    const startInput = document.querySelector(`.line-start-input[data-core="${rowNumber}"]`);
-    const endInput = document.querySelector(`.line-end-input[data-core="${rowNumber}"]`);
-    const memoInput = document.querySelector(`.line-memo-input[data-core="${rowNumber}"]`);
-
-    if (startInput) startInput.value = core.startLineNo ?? String(rowNumber);
-    if (endInput) endInput.value = core.endLineNo ?? String(rowNumber);
-    if (memoInput) memoInput.value = core.lineMemo || core.forwardMemo || core.reverseMemo || "";
-
-    wavelengths.forEach((wavelength) => {
-      const forwardInput = document.querySelector(`.measured-input[data-core="${rowNumber}"][data-direction="forward"][data-wavelength="${wavelength}"]`);
-      const reverseInput = document.querySelector(`.measured-input[data-core="${rowNumber}"][data-direction="reverse"][data-wavelength="${wavelength}"]`);
-      const forward = getCoreMeasurementObject(core, "forward", wavelength);
-      const reverse = getCoreMeasurementObject(core, "reverse", wavelength);
-
-      if (forwardInput) forwardInput.value = formatMeasuredInputValue(forward.value);
-      if (reverseInput) reverseInput.value = formatMeasuredInputValue(reverse.value);
+  for (let i = 0; i < Number(count || 0); i++) {
+    const row = values[i] || {};
+    rows.push({
+      lineNo: row.lineNo || incrementLineLabel(firstLineNo || "1", i),
+      value: row.value === null || row.value === undefined ? "" : formatMeasuredValue(row.value),
+      memo: row.memo || ""
     });
-  });
-
-  rememberCurrentCoreRows();
-}
-
-function cancelEditMode(clearMessage = true) {
-  editingRecordId = null;
-  $("saveBtn").textContent = "履歴に保存";
-  $("cancelEditBtn").classList.add("hidden");
-
-  if (clearMessage) {
-    alert("編集をキャンセルしました。");
   }
-}
-
-function switchScreen(screenId) {
-  document.querySelectorAll(".screen").forEach((screen) => screen.classList.remove("active"));
-  document.querySelectorAll(".nav-btn").forEach((btn) => {
-    btn.classList.toggle("active", btn.dataset.screen === screenId);
-  });
-  $(screenId).classList.add("active");
-}
-
-
-function deleteRecord(id) {
-  if (!confirm("この履歴を削除しますか？")) return;
-  const records = loadRecords().filter((record) => record.id !== id);
-  saveRecords(records);
-  renderHistory();
-}
-
-function clearAllRecords() {
-  if (!confirm("すべての履歴を削除します。よろしいですか？")) return;
-  localStorage.removeItem(STORAGE_KEY);
-  renderHistory();
-}
-
-function buildCsvRowsForRecords(records) {
-  const headers = [
-    "保存日時",
-    "現場名",
-    "区間名",
-    "始端盤名",
-    "遠端盤名",
-    "始端LM",
-    "遠端LM",
-    "ケーブル長m",
-    "ケーブル長km",
-    "ケーブル種類",
-    "波長",
-    "融着点数",
-    "コネクタ数",
-    "測定方向",
-    "始端側芯数",
-    "遠端側芯数",
-    "規格値",
-    "始端側線番",
-    "始端側測定値",
-    "始端側判定",
-    "遠端側線番",
-    "遠端側測定値",
-    "遠端側判定",
-    "線番メモ",
-    "区間メモ"
-  ];
-
-  const rows = [headers];
-
-  records.forEach((record) => {
-    const wavelengths = normalizeRecordWavelengths(record);
-
-    // CSVも画面入力と同じく「波長ごと」に出力する。
-    // 例：1310nm 全芯線 → 1550nm 全芯線
-    wavelengths.forEach((wavelength) => {
-      record.cores.forEach((core) => {
-        const startLineNo = core.startLineNo ?? String(core.coreNo);
-        const endLineNo = core.endLineNo ?? String(core.coreNo);
-        const lineMemo = core.lineMemo || core.forwardMemo || core.reverseMemo || "";
-        const forward = getCoreMeasurementObject(core, "forward", wavelength);
-        const reverse = getCoreMeasurementObject(core, "reverse", wavelength);
-        const standardValue = record.displayStandardValues?.[wavelength] || record.standardValues?.[wavelength] || record.displayStandardValue;
-
-        rows.push([
-          formatDateTime(record.savedAt),
-          record.siteName,
-          record.sectionName,
-          record.startPanel,
-          record.endPanel,
-          record.startLm,
-          record.endLm,
-          formatNumber(record.lengthM, 3),
-          formatNumber(record.lengthKm, 6),
-          record.cableType,
-          wavelength,
-          record.spliceCount,
-          record.connectorCount,
-          record.measurementMode || core.measurementMode || "both",
-          record.startCoreCount || "",
-          record.endCoreCount || "",
-          standardValue,
-          startLineNo,
-          formatMeasuredCsv(forward.value),
-          forward.result || "",
-          endLineNo,
-          formatMeasuredCsv(reverse.value),
-          reverse.result || "",
-          lineMemo,
-          record.memo
-        ]);
-      });
-    });
-  });
 
   return rows;
 }
 
-function exportCsv() {
-  const records = loadRecords();
 
+function cancelEditMode(showMessage = true) {
+  editingRecordId = null;
+  $("saveBtn").textContent = "履歴に保存";
+  $("cancelEditBtn").classList.add("hidden");
+  if (showMessage) alert("編集をキャンセルしました。");
+}
+
+function deleteRecord(id) {
+  if (!confirm("この履歴を削除しますか？")) return;
+  saveRecords(loadRecords().filter((record) => record.id !== id));
+  renderHistory();
+}
+
+function clearAllRecords() {
+  if (!confirm("全履歴を削除しますか？この操作は戻せません。")) return;
+  localStorage.removeItem(STORAGE_KEY);
+  renderHistory();
+}
+
+function buildCsvRows(records) {
+  const headers = [
+    "保存日時","工事番号","現場名","区間名","始端盤名","遠端盤名","始端LM","遠端LM","ケーブル長m","ケーブル長km",
+    "ケーブル種類","波長","融着点数","コネクタ数","規格値","測定方向","芯線数","線番","測定値","判定",
+    "始点校正値","終点校正値","使用校正値種別","使用校正値","メモ","区間メモ"
+  ];
+  const rows = [headers];
+
+  records.forEach((record) => {
+    record.wavelengths.forEach((waveNum) => {
+      const wave = String(waveNum);
+      const data = record.measurements?.[wave] || {};
+      const startCal = formatCalibrationDisplay(data.startCalibration);
+      const endCal = formatCalibrationDisplay(data.endCalibration);
+
+      [
+        ["始端側→遠端側", data.startCoreCount, "始点校正値", data.startCalibration, data.startValues || []],
+        ["遠端側→始端側", data.endCoreCount, "終点校正値", data.endCalibration, data.endValues || []]
+      ].forEach(([sideLabel, coreCount, calLabel, calValue, list]) => {
+        list.forEach((row) => {
+          rows.push([
+            formatDateTime(record.savedAt),
+            record.workNoDisplay || formatWorkNo(record.workNo),
+            record.siteName,
+            record.sectionName,
+            record.startPanel,
+            record.endPanel,
+            record.startLm,
+            record.endLm,
+            formatNumber(record.lengthM, 3),
+            formatNumber(record.lengthKm, 6),
+            record.cableType,
+            `${wave}nm`,
+            record.spliceCount,
+            record.connectorCount,
+            record.results?.[wave]?.displayStandardValue,
+            sideLabel,
+            coreCount,
+            row.lineNo,
+            formatMeasuredValue(row.value),
+            row.result,
+            startCal,
+            endCal,
+            calLabel,
+            formatCalibrationDisplay(calValue),
+            row.memo,
+            record.memo
+          ]);
+        });
+      });
+    });
+  });
+  return rows;
+}
+
+function exportAllCsv() {
+  const records = loadRecords();
   if (records.length === 0) {
     alert("出力する履歴がありません。");
     return;
   }
-
-  const csv = buildCsvRowsForRecords(records).map((row) => row.map(csvEscape).join(",")).join("\r\n");
-  downloadTextFile("\uFEFF" + csv, `fiber-loss-history-all-${dateStamp()}.csv`, "text/csv;charset=utf-8;");
+  downloadCsv(buildCsvRows(records), `fiber-loss-smgi-all-${dateStamp()}.csv`);
 }
 
 function exportRecordCsv(id) {
-  const records = loadRecords();
-  const record = records.find((item) => item.id === id);
-
-  if (!record) {
-    alert("CSV出力する履歴が見つかりません。");
-    return;
-  }
-
-  const csv = buildCsvRowsForRecords([record]).map((row) => row.map(csvEscape).join(",")).join("\r\n");
-  const namePart = [
-    record.siteName || "site",
-    record.sectionName || "section",
-    record.cableType || "cable"
-  ].join("-").replace(/[\\/:*?"<>|]/g, "_");
-
-  downloadTextFile("\uFEFF" + csv, `fiber-loss-${namePart}-${dateStamp()}.csv`, "text/csv;charset=utf-8;");
+  const record = loadRecords().find((item) => item.id === id);
+  if (!record) return;
+  const name = `${record.workNoDisplay || formatWorkNo(record.workNo)}-${record.sectionName || record.cableType}`;
+  downloadCsv(buildCsvRows([record]), `fiber-loss-smgi-${safeFileName(name)}-${dateStamp()}.csv`);
 }
 
-function downloadJsonBackup() {
-  const records = loadRecords();
-  const payload = {
-    app: "fiber-loss-pwa",
-    version: 1,
-    exportedAt: new Date().toISOString(),
-    records
-  };
-
-  downloadTextFile(JSON.stringify(payload, null, 2), `fiber-loss-backup-${dateStamp()}.json`, "application/json");
-}
-
-function importJsonBackup(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-
-  const reader = new FileReader();
-  reader.onload = () => {
-    try {
-      const payload = JSON.parse(reader.result);
-      if (!Array.isArray(payload.records)) throw new Error("records配列がありません。");
-
-      if (!confirm("現在の履歴にJSONの履歴を追加します。よろしいですか？")) return;
-
-      const current = loadRecords();
-      const merged = [...payload.records, ...current];
-      saveRecords(merged);
-      renderHistory();
-      alert("JSONを読み込みました。");
-    } catch (error) {
-      alert(`JSON読込に失敗しました：${error.message}`);
-    } finally {
-      event.target.value = "";
-    }
-  };
-  reader.readAsText(file);
-}
-
-function renderStandardsPreview() {
-  $("standardsPreview").textContent = JSON.stringify({
-    normalStandards
-  }, null, 2);
-}
-
-function csvEscape(value) {
-  const text = value === undefined || value === null ? "" : String(value);
-  return `"${text.replace(/"/g, '""')}"`;
-}
-
-function downloadTextFile(text, filename, type) {
-  const blob = new Blob([text], { type });
+function downloadCsv(rows, filename) {
+  const csv = rows.map((row) => row.map(csvEscape).join(",")).join("\r\n");
+  const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -1531,53 +1005,517 @@ function downloadTextFile(text, filename, type) {
   URL.revokeObjectURL(url);
 }
 
+function downloadJsonBackup() {
+  const data = { app: "fiber-loss-smgi-wavecal-trial", exportedAt: new Date().toISOString(), records: loadRecords() };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `fiber-loss-smgi-backup-${dateStamp()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function importJsonBackup(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(reader.result);
+      const records = Array.isArray(data) ? data : data.records;
+      if (!Array.isArray(records)) throw new Error("履歴データがありません。");
+      if (confirm("現在の履歴にJSONの履歴を追加しますか？")) {
+        saveRecords([...records, ...loadRecords()]);
+        renderHistory();
+        alert("JSON履歴を読み込みました。");
+      }
+    } catch (error) {
+      alert(`JSON読込に失敗しました：${error.message}`);
+    } finally {
+      event.target.value = "";
+    }
+  };
+  reader.readAsText(file);
+}
+
+function showRecordReport(id) {
+  const record = loadRecords().find((item) => item.id === id);
+  if (!record) return;
+  $("reportContent").innerHTML = renderReportSheet(record);
+  $("reportModal").classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+}
+
+function closeReportModal() {
+  $("reportModal").classList.add("hidden");
+  $("reportContent").innerHTML = "";
+  document.body.style.overflow = "";
+}
+
+function renderReportSheet(record) {
+  const workNo = record.workNoDisplay || formatWorkNo(record.workNo) || "";
+  const standards = record.wavelengths.map((w) => `${w}nm:${record.results[String(w)].displayStandardValue}dB`).join(" / ");
+  return `
+    <article class="report-sheet">
+      <div class="report-title">
+        <div>
+          <h2>SM/GI 光ケーブル測定控え</h2>
+          <p class="hint">保存時点の入力結果・規格値・測定値・判定を表示しています。</p>
+        </div>
+        <div class="report-standard">
+          <div>${escapeHtml(workNo)}</div>
+          <div>規格値 ${escapeHtml(standards)}</div>
+        </div>
+      </div>
+
+      <div class="report-info-grid">
+        <div class="report-info-item"><strong>保存日時</strong><span>${escapeHtml(formatDateTime(record.savedAt))}</span></div>
+        <div class="report-info-item"><strong>更新日時</strong><span>${escapeHtml(record.updatedAt ? formatDateTime(record.updatedAt) : "-")}</span></div>
+        <div class="report-info-item"><strong>工事番号</strong><span>${escapeHtml(workNo)}</span></div>
+        <div class="report-info-item"><strong>現場名</strong><span>${escapeHtml(record.siteName || "")}</span></div>
+        <div class="report-info-item"><strong>区間名</strong><span>${escapeHtml(record.sectionName || "")}</span></div>
+        <div class="report-info-item"><strong>始端盤名</strong><span>${escapeHtml(record.startPanel || "")}</span></div>
+        <div class="report-info-item"><strong>遠端盤名</strong><span>${escapeHtml(record.endPanel || "")}</span></div>
+        <div class="report-info-item"><strong>ケーブル長</strong><span>${formatNumber(record.lengthM, 3)} m / ${formatNumber(record.lengthKm, 6)} km</span></div>
+        <div class="report-info-item"><strong>ケーブル種類</strong><span>${escapeHtml(record.cableType || "")}</span></div>
+        <div class="report-info-item"><strong>波長</strong><span>${record.wavelengths.map((w) => `${w}nm`).join(" / ")}</span></div>
+        <div class="report-info-item"><strong>融着 / コネクタ</strong><span>${record.spliceCount}点 / ${record.connectorCount}個</span></div>
+        <div class="report-info-item"><strong>区間メモ</strong><span>${escapeHtml(record.memo || "")}</span></div>
+      </div>
+
+      <h3>測定結果</h3>
+      ${record.wavelengths.map((wave) => renderSavedWave(record, String(wave))).join("")}
+    </article>
+  `;
+}
+
+function resetStateAfterFormReset() {
+  latestCalculation = null;
+  editingRecordId = null;
+  waveDraft = {};
+  $("resultCard").classList.add("hidden");
+  $("errorBox").classList.add("hidden");
+  $("sectionName").dataset.manual = "false";
+  $("saveBtn").textContent = "履歴に保存";
+  $("cancelEditBtn").classList.add("hidden");
+  $("spliceCount").value = 2;
+  $("connectorCount").value = 2;
+  updateWavelengthOptions();
+  renderWaveConfigs(false);
+  renderMeasurements(false);
+}
+
+function saveDraftSoon() {
+  if (suppressDraftSave || isRestoringDraft) return;
+  clearTimeout(saveDraftSoon.timer);
+  saveDraftSoon.timer = setTimeout(saveDraft, 180);
+}
+
+function saveDraft() {
+  if (suppressDraftSave || isRestoringDraft) return;
+  collectWaveInputs();
+  const data = {
+    savedAt: new Date().toISOString(),
+    form: {
+      workNo: $("workNo").value,
+      siteName: $("siteName").value,
+      sectionName: $("sectionName").value,
+      sectionManual: $("sectionName").dataset.manual || "false",
+      startPanel: $("startPanel").value,
+      endPanel: $("endPanel").value,
+      startLm: $("startLm").value,
+      endLm: $("endLm").value,
+      cableType: $("cableType").value,
+      wavelength: $("wavelength").value,
+      spliceCount: $("spliceCount").value,
+      connectorCount: $("connectorCount").value,
+      memo: $("memo").value
+    },
+    waveDraft,
+    latestCalculation
+  };
+  localStorage.setItem(DRAFT_KEY, JSON.stringify(data));
+}
+
+function restoreDraftIfNeeded() {
+  const raw = localStorage.getItem(DRAFT_KEY);
+  if (!raw) return;
+
+  let draftData;
+  try { draftData = JSON.parse(raw); }
+  catch {
+    localStorage.removeItem(DRAFT_KEY);
+    return;
+  }
+
+  const savedAt = draftData.savedAt ? formatDateTime(draftData.savedAt) : "";
+  const firstMessage = savedAt
+    ? `途中保存された入力があります。\n保存日時：${savedAt}\n\n測定値・波長別校正値も復元できます。\n復元しますか？`
+    : "途中保存された入力があります。\n\n測定値・波長別校正値も復元できます。\n復元しますか？";
+
+  if (confirm(firstMessage)) {
+    restoreDraft(draftData);
+    return;
+  }
+
+  const warningMessage =
+    "警告：途中入力を破棄しようとしています。\n\n" +
+    "復元しない場合、途中保存されている測定値・波長別校正値・工事番号・入力中の内容は削除されます。\n\n" +
+    "本当に破棄しますか？";
+
+  if (confirm(warningMessage)) {
+    localStorage.removeItem(DRAFT_KEY);
+    return;
+  }
+
+  restoreDraft(draftData);
+}
+
+function restoreDraft(draftData) {
+  isRestoringDraft = true;
+
+  const form = draftData.form || {};
+
+  $("workNo").value = form.workNo || "";
+  $("siteName").value = form.siteName || "";
+  $("sectionName").value = form.sectionName || "";
+  $("sectionName").dataset.manual = form.sectionManual || "false";
+  $("startPanel").value = form.startPanel || "";
+  $("endPanel").value = form.endPanel || "";
+  $("startLm").value = form.startLm || "";
+  $("endLm").value = form.endLm || "";
+  $("cableType").value = form.cableType || "SM";
+  updateWavelengthOptions();
+  $("wavelength").value = form.wavelength || "both";
+  $("spliceCount").value = form.spliceCount || "2";
+  $("connectorCount").value = form.connectorCount || "2";
+  $("memo").value = form.memo || "";
+
+  waveDraft = normalizeRestoredWaveDraft(draftData.waveDraft || {}, draftData.latestCalculation || null);
+  latestCalculation = draftData.latestCalculation || null;
+
+  renderWaveConfigs(false);
+  renderMeasurementInputs();
+
+  isRestoringDraft = false;
+
+  if (latestCalculation?.results) {
+    renderCalculation(latestCalculation);
+  } else {
+    $("resultCard").classList.add("hidden");
+  }
+
+  updateJudgements();
+  renderLiveSummary();
+  saveDraftSoon();
+}
+
+function normalizeRestoredWaveDraft(restored, restoredCalculation) {
+  const out = {};
+  const selected = getSelectedWavelengths().map(String);
+
+  selected.forEach((wave) => {
+    const src = restored[String(wave)] || {};
+    const calcSettings = restoredCalculation?.waveSettings?.[String(wave)] || {};
+    const calcMeasurements = restoredCalculation?.measurements?.[String(wave)] || {};
+
+    const startCoreCount = Number(src.startCoreCount ?? calcSettings.startCoreCount ?? calcMeasurements.startCoreCount ?? 4);
+    const endCoreCount = Number(src.endCoreCount ?? calcSettings.endCoreCount ?? calcMeasurements.endCoreCount ?? 4);
+    const startFirstLineNo = src.startFirstLineNo ?? calcSettings.startFirstLineNo ?? calcMeasurements.startFirstLineNo ?? "1";
+    const endFirstLineNo = src.endFirstLineNo ?? calcSettings.endFirstLineNo ?? calcMeasurements.endFirstLineNo ?? "1";
+
+    out[String(wave)] = {
+      startCalibration: src.startCalibration ?? formatCalibrationInputValue(calcSettings.startCalibration ?? calcMeasurements.startCalibration),
+      endCalibration: src.endCalibration ?? formatCalibrationInputValue(calcSettings.endCalibration ?? calcMeasurements.endCalibration),
+      startCoreCount,
+      endCoreCount,
+      startFirstLineNo,
+      endFirstLineNo,
+      startValues: normalizeRestoredSideValues(src.startValues || calcMeasurements.startValues || [], startCoreCount, startFirstLineNo),
+      endValues: normalizeRestoredSideValues(src.endValues || calcMeasurements.endValues || [], endCoreCount, endFirstLineNo)
+    };
+  });
+
+  return out;
+}
+
+function normalizeRestoredSideValues(values, count, firstLineNo) {
+  const rows = [];
+  for (let i = 0; i < Number(count || 0); i++) {
+    const row = values[i] || {};
+    rows.push({
+      lineNo: row.lineNo || incrementLineLabel(firstLineNo || "1", i),
+      value: row.value === null || row.value === undefined ? "" : String(row.value),
+      memo: row.memo || ""
+    });
+  }
+  return rows;
+}
+
+
+function setupInputPreviewForAllFields() {
+  document.querySelectorAll("input, select, textarea").forEach((el) => {
+    if (el.dataset.previewReady === "true") return;
+    if (el.type === "file") return;
+    el.dataset.previewReady = "true";
+    el.addEventListener("focus", () => showPreviewForElement(el));
+    el.addEventListener("input", () => updatePreviewForActiveElement());
+    el.addEventListener("change", () => updatePreviewForActiveElement());
+    el.addEventListener("blur", () => {
+      setTimeout(() => {
+        const active = document.activeElement;
+        if (!active || !["INPUT", "SELECT", "TEXTAREA"].includes(active.tagName)) hideInputPreview();
+      }, 130);
+    });
+  });
+}
+
+function positionInputPreview() {
+  const panel = $("inputPreview");
+  if (!panel || panel.classList.contains("hidden")) return;
+  const viewport = window.visualViewport;
+  const viewportTop = viewport ? viewport.offsetTop : 0;
+  const top = Math.max(8, Math.round(viewportTop + 8));
+  panel.style.setProperty("position", "fixed", "important");
+  panel.style.setProperty("top", `${top}px`, "important");
+  panel.style.setProperty("left", "10px", "important");
+  panel.style.setProperty("right", "10px", "important");
+  panel.style.setProperty("transform", "none", "important");
+  panel.style.setProperty("z-index", "2147483647", "important");
+  panel.style.setProperty("display", "block", "important");
+}
+
+function bindViewportPreviewReposition() {
+  const reposition = () => {
+    const panel = $("inputPreview");
+    if (!panel || panel.classList.contains("hidden")) return;
+    positionInputPreview();
+  };
+  window.addEventListener("scroll", reposition, { passive: true });
+  window.addEventListener("resize", reposition);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("scroll", reposition, { passive: true });
+    window.visualViewport.addEventListener("resize", reposition);
+  }
+}
+
+function showPreviewForElement(el) {
+  updateInputPreview(el);
+  $("inputPreview").classList.remove("hidden");
+  positionInputPreview();
+}
+
+function updatePreviewForActiveElement() {
+  const el = document.activeElement;
+  if (!el || !["INPUT", "SELECT", "TEXTAREA"].includes(el.tagName)) return;
+  updateInputPreview(el);
+}
+
+function hideInputPreview() {
+  $("inputPreview").classList.add("hidden");
+}
+
+function updateInputPreview(el) {
+  if (!el) return;
+  const context = getPreviewContext(el);
+  $("previewLabel").textContent = context.label;
+  $("previewValue").textContent = context.value || "未入力";
+
+  const meta = $("previewMeta");
+  meta.innerHTML = "";
+  if (context.meta && context.meta.length) {
+    context.meta.forEach((item) => {
+      const span = document.createElement("span");
+      span.textContent = item.text;
+      if (item.className) span.classList.add(item.className);
+      meta.appendChild(span);
+    });
+    meta.classList.remove("hidden");
+  } else {
+    meta.classList.add("hidden");
+  }
+
+  $("inputPreview").classList.remove("hidden");
+  positionInputPreview();
+}
+
+function getPreviewContext(el) {
+  if (el.classList.contains("measure-input")) {
+    const wave = el.dataset.wave;
+    const side = el.dataset.side;
+    const sideLabel = side === "start" ? "始端側→遠端側" : "遠端側→始端側";
+    const line = el.dataset.lineNo || "";
+    const raw = el.value;
+    const value = raw !== "" && Number.isFinite(Number(raw)) ? `${Number(raw).toFixed(2)} dB` : "未入力";
+    const d = ensureWave(wave);
+    const calibration = side === "start" ? d.startCalibration : d.endCalibration;
+    const calLabel = side === "start" ? "始点校正値" : "終点校正値";
+    const judge = getResultForValue(raw, latestCalculation?.results?.[wave]?.standardValue);
+
+    return {
+      label: `${wave}nm　${sideLabel}　線番${line}`,
+      value,
+      meta: [
+        { text: latestCalculation?.results?.[wave] ? `規格値：${latestCalculation.results[wave].displayStandardValue} dB` : "規格値：未計算" },
+        { text: `${calLabel}：${formatCalibrationDisplay(calibration)} dB` },
+        { text: `判定：${judge}`, className: judge === "OK" ? "preview-ok" : judge === "NG" ? "preview-ng" : "preview-pending" }
+      ]
+    };
+  }
+
+  if (el.classList.contains("line-memo-input")) {
+    const wave = el.dataset.wave;
+    const side = el.dataset.side === "start" ? "始端側→遠端側" : "遠端側→始端側";
+    return { label: `${wave}nm　${side}メモ　線番${el.dataset.lineNo || ""}`, value: el.value || "未入力", meta: [] };
+  }
+
+  if (el.classList.contains("wave-config-input")) {
+    const wave = el.dataset.wave;
+    const kind = el.dataset.kind;
+    const map = {
+      startCalibration: "始点校正値",
+      endCalibration: "終点校正値",
+      startCoreCount: "芯線数 始端",
+      endCoreCount: "芯線数 遠端",
+      startFirstLineNo: "始端側開始線番",
+      endFirstLineNo: "遠端側開始線番"
+    };
+    let value = el.value || "";
+    if (kind === "startCalibration" || kind === "endCalibration") {
+      value = value !== "" && Number.isFinite(Number(value)) ? `${Number(value).toFixed(2)} dB` : "";
+    } else if (kind === "startCoreCount" || kind === "endCoreCount") {
+      value = value ? `${value} 芯` : "";
+    }
+    return { label: `${wave}nm ${map[kind] || "設定"}`, value: value || "未入力", meta: [] };
+  }
+
+  const id = el.id;
+  let label = previewLabels[id] || "入力値";
+  let value = el.value || "";
+
+  if (id === "workNo") value = value ? formatWorkNo(value) || value : "";
+  else if (id === "startLm" || id === "endLm") value = value ? `${value} m` : "";
+  else if (id === "spliceCount") value = value ? `${value} 点` : "";
+  else if (id === "connectorCount") value = value ? `${value} 個` : "";
+  else if (id === "wavelength") value = getSelectedWavelengths().map((w) => `${w}nm`).join(" / ");
+
+  const meta = [];
+  if (latestCalculation) {
+    meta.push({ text: `規格値：${latestCalculation.wavelengths.map((w) => `${w}nm ${latestCalculation.results[String(w)].displayStandardValue}dB`).join(" / ")}` });
+  }
+
+  return { label, value: value || "未入力", meta };
+}
+
+function validateWorkNo() {
+  const value = $("workNo").value.trim();
+  if (!/^\d{5}$/.test(value)) throw new Error("工事番号はK-を除いた数字5桁で入力してください。例：26001");
+  return value;
+}
+
+function formatWorkNo(raw) {
+  const digits = String(raw || "").replace(/\D/g, "").slice(0, 5);
+  return digits.length === 5 ? `K-${digits}` : "";
+}
+
+function getNumber(id, label, min = null) {
+  const raw = $(id).value;
+  const value = Number(raw);
+  if (raw === "" || !Number.isFinite(value)) throw new Error(`${label}を入力してください。`);
+  if (min !== null && value < min) throw new Error(`${label}は${min}以上で入力してください。`);
+  return value;
+}
+
+function incrementLineLabel(baseLabel, offset) {
+  const text = String(baseLabel || "").trim();
+  if (text === "") return "";
+  if (/^-?\d+$/.test(text)) return String(Number(text) + offset);
+  const match = text.match(/^(.*?)(\d+)$/);
+  if (!match) return offset === 0 ? text : `${text}+${offset}`;
+  const prefix = match[1];
+  const numText = match[2];
+  return `${prefix}${String(Number(numText) + offset).padStart(numText.length, "0")}`;
+}
+
+function getResultForValue(raw, standard) {
+  const value = toNullableNumber(raw);
+  if (value === null || standard === undefined) return "未判定";
+  return value <= standard ? "OK" : "NG";
+}
+
+function formatAllCalibrationInputs() {
+  document.querySelectorAll(".calibration-input").forEach(formatCalibrationInput);
+  collectWaveInputs();
+}
+
+function formatCalibrationInput(input) {
+  if (!input || input.value === "") return;
+  const value = Number(input.value);
+  if (Number.isFinite(value)) input.value = value.toFixed(2);
+}
+
+function formatCalibrationInputValue(value) {
+  if (value === "" || value === null || value === undefined) return "";
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toFixed(2) : "";
+}
+
+function formatCalibrationDisplay(value) {
+  if (value === "" || value === null || value === undefined) return "";
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toFixed(2) : "";
+}
 
 function formatMeasuredInput(input) {
   if (!input || input.value === "") return;
   const value = Number(input.value);
-  if (!Number.isFinite(value)) return;
-  input.value = value.toFixed(2);
+  if (Number.isFinite(value)) input.value = value.toFixed(2);
 }
 
-function formatMeasuredInputValue(value) {
-  if (value === null || value === undefined || value === "") return "";
-  const num = Number(value);
-  return Number.isFinite(num) ? num.toFixed(2) : "";
+function formatMeasuredValue(value) {
+  if (value === "" || value === null || value === undefined) return "";
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toFixed(2) : "";
 }
 
-function formatMeasuredDisplay(value) {
-  return escapeHtml(formatMeasuredInputValue(value));
+function toNullableNumber(value) {
+  if (value === "" || value === null || value === undefined) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
 }
-
-function formatMeasuredCsv(value) {
-  return formatMeasuredInputValue(value);
-}
-
 
 function formatNumber(value, digits) {
-  if (!Number.isFinite(Number(value))) return "";
-  return Number(value).toFixed(digits).replace(/\.?0+$/, (match) => match.startsWith(".") ? "" : "");
+  return Number(value).toFixed(digits).replace(/\.?0+$/, "");
 }
 
 function formatDateTime(iso) {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
-  const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const dd = String(date.getDate()).padStart(2, "0");
-  const hh = String(date.getHours()).padStart(2, "0");
-  const mi = String(date.getMinutes()).padStart(2, "0");
-  return `${yyyy}/${mm}/${dd} ${hh}:${mi}`;
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  const h = String(date.getHours()).padStart(2, "0");
+  const min = String(date.getMinutes()).padStart(2, "0");
+  return `${y}/${m}/${d} ${h}:${min}`;
 }
 
 function dateStamp() {
   const date = new Date();
-  const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const dd = String(date.getDate()).padStart(2, "0");
-  const hh = String(date.getHours()).padStart(2, "0");
-  const mi = String(date.getMinutes()).padStart(2, "0");
-  return `${yyyy}${mm}${dd}-${hh}${mi}`;
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  const h = String(date.getHours()).padStart(2, "0");
+  const min = String(date.getMinutes()).padStart(2, "0");
+  return `${y}${m}${d}-${h}${min}`;
+}
+
+function safeFileName(value) {
+  return String(value || "smgi").replace(/[\\/:*?"<>|]/g, "_");
+}
+
+function csvEscape(value) {
+  return `"${String(value ?? "").replace(/"/g, '""')}"`;
 }
 
 function escapeHtml(value) {
@@ -1589,11 +1527,12 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function resultClass(result) {
+  return result === "OK" ? "ok" : result === "NG" ? "ng" : "pending";
+}
 
 function registerServiceWorker() {
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./service-worker.js").catch(() => {
-      // ローカルHTTPや一部ブラウザでは失敗する場合があります。計算機能には影響しません。
-    });
+    navigator.serviceWorker.register("./service-worker.js").catch(() => {});
   }
 }

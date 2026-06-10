@@ -1,10 +1,11 @@
 {
-  "name": "SM/GI 光ケーブル規格値計算",
-  "short_name": "SMGI規格値",
-  "description": "SM/GI光ケーブルの規格値計算、両波長測定、芯線別記録、履歴編集、CSV出力をオフラインで行うPWAです。OCRなし安定版。",
+  "name": "SM/GI 光ケーブル規格値計算 試作版",
+  "short_name": "SMGI試作",
+  "description": "SM/GI光ケーブルの波長別校正値・波長別芯線数・測定値一覧を管理するPWA試作版です。",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
+  "orientation": "portrait",
   "background_color": "#eef3f6",
   "theme_color": "#12324a",
   "icons": [
@@ -20,6 +21,5 @@
       "type": "image/png",
       "purpose": "any maskable"
     }
-  ],
-  "orientation": "portrait"
+  ]
 }
