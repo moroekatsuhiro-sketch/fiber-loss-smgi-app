@@ -521,7 +521,8 @@ function calculateSmgi(input) {
     const cableLossValue = input.lengthKm * master.cableLoss;
     const spliceLossValue = input.spliceCount * master.spliceLoss;
     const connectorLossValue = input.connectorCount * master.connectorLoss;
-    const standardValue = cableLossValue + spliceLossValue + connectorLossValue;
+    const rawStandardValue = cableLossValue + spliceLossValue + connectorLossValue;
+    const standardValue = truncateNumber(rawStandardValue, 2);
     results[String(wave)] = {
       wavelength: wave,
       cableLoss: master.cableLoss,
@@ -530,8 +531,9 @@ function calculateSmgi(input) {
       cableLossValue,
       spliceLossValue,
       connectorLossValue,
+      rawStandardValue,
       standardValue,
-      displayStandardValue: standardValue.toFixed(2)
+      displayStandardValue: formatFixedTruncated(standardValue, 2)
     };
   });
   return { ...input, results };
@@ -561,7 +563,7 @@ function renderCalculation(calc) {
     ["融着点数", `${calc.spliceCount}点`],
     ["コネクタ数", `${calc.connectorCount}個`],
     ["計算式", "ケーブル長(km)×ケーブル損失 + 融着点数×0.15 + コネクタ数×0.35"],
-    ["小数処理", "規格値・測定値・校正値は小数第2位表示"]
+    ["小数処理", "規格値・測定値・校正値は小数第3位以下を切り捨て、小数第2位表示"]
   ];
 
   calc.wavelengths.forEach((wave) => {
@@ -1356,7 +1358,7 @@ function getPreviewContext(el) {
     const sideLabel = side === "start" ? "始端側→遠端側" : "遠端側→始端側";
     const line = el.dataset.lineNo || "";
     const raw = el.value;
-    const value = raw !== "" && Number.isFinite(Number(raw)) ? `${Number(raw).toFixed(2)} dB` : "未入力";
+    const value = raw !== "" && Number.isFinite(Number(raw)) ? `${formatFixedTruncated(raw, 2)} dB` : "未入力";
     const d = ensureWave(wave);
     const calibration = side === "start" ? d.startCalibration : d.endCalibration;
     const calLabel = side === "start" ? "始点校正値" : "終点校正値";
@@ -1392,7 +1394,7 @@ function getPreviewContext(el) {
     };
     let value = el.value || "";
     if (kind === "startCalibration" || kind === "endCalibration") {
-      value = value !== "" && Number.isFinite(Number(value)) ? `${Number(value).toFixed(2)} dB` : "";
+      value = value !== "" && Number.isFinite(Number(value)) ? `${formatFixedTruncated(value, 2)} dB` : "";
     } else if (kind === "startCoreCount" || kind === "endCoreCount") {
       value = value ? `${value} 芯` : "";
     }
@@ -1461,31 +1463,28 @@ function formatAllCalibrationInputs() {
 function formatCalibrationInput(input) {
   if (!input || input.value === "") return;
   const value = Number(input.value);
-  if (Number.isFinite(value)) input.value = value.toFixed(2);
+  if (Number.isFinite(value)) input.value = formatFixedTruncated(value, 2);
 }
 
 function formatCalibrationInputValue(value) {
   if (value === "" || value === null || value === undefined) return "";
-  const number = Number(value);
-  return Number.isFinite(number) ? number.toFixed(2) : "";
+  return formatFixedTruncated(value, 2);
 }
 
 function formatCalibrationDisplay(value) {
   if (value === "" || value === null || value === undefined) return "";
-  const number = Number(value);
-  return Number.isFinite(number) ? number.toFixed(2) : "";
+  return formatFixedTruncated(value, 2);
 }
 
 function formatMeasuredInput(input) {
   if (!input || input.value === "") return;
   const value = Number(input.value);
-  if (Number.isFinite(value)) input.value = value.toFixed(2);
+  if (Number.isFinite(value)) input.value = formatFixedTruncated(value, 2);
 }
 
 function formatMeasuredValue(value) {
   if (value === "" || value === null || value === undefined) return "";
-  const number = Number(value);
-  return Number.isFinite(number) ? number.toFixed(2) : "";
+  return formatFixedTruncated(value, 2);
 }
 
 function toNullableNumber(value) {
@@ -1494,8 +1493,21 @@ function toNullableNumber(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function truncateNumber(value, digits = 2) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  const factor = 10 ** digits;
+  return number < 0 ? Math.ceil(number * factor) / factor : Math.floor(number * factor) / factor;
+}
+
+function formatFixedTruncated(value, digits = 2) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "";
+  return truncateNumber(number, digits).toFixed(digits);
+}
+
 function formatNumber(value, digits) {
-  return Number(value).toFixed(digits).replace(/\.?0+$/, "");
+  return formatFixedTruncated(value, digits).replace(/\.?0+$/, "");
 }
 
 function formatDateTime(iso) {

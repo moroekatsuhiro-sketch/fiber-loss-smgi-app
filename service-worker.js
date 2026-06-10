@@ -1,10 +1,10 @@
-const CACHE_NAME = "fiber-loss-smgi-wavecal-trial-fix5-v1";
+const CACHE_NAME = "fiber-loss-smgi-wavecal-trial-fix6-truncate-v1";
 
 const ASSETS = [
   "./",
   "./index.html",
-  "./style.css?v=smgi-wavecal-trial-fix5",
-  "./app.js?v=smgi-wavecal-trial-fix5",
+  "./style.css?v=smgi-wavecal-trial-fix6-truncate",
+  "./app.js?v=smgi-wavecal-trial-fix6-truncate",
   "./manifest.json",
   "./icon-192.png",
   "./icon-512.png"
