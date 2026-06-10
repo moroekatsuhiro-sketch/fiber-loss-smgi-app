@@ -91,23 +91,25 @@ function initEvents() {
   $("cableType").addEventListener("change", () => {
     collectWaveInputs();
     updateWavelengthOptions();
+    clearCalculationOnly();
     renderWaveConfigs(true);
     renderMeasurements(true);
-    clearCalculationOnly();
     saveDraftSoon();
   });
 
   $("wavelength").addEventListener("change", () => {
     collectWaveInputs();
+    clearCalculationOnly();
     renderWaveConfigs(true);
     renderMeasurements(true);
-    clearCalculationOnly();
     saveDraftSoon();
   });
 
   ["startLm", "endLm", "spliceCount", "connectorCount", "siteName", "memo"].forEach((id) => {
     $(id).addEventListener("input", () => {
-      if (["startLm", "endLm", "spliceCount", "connectorCount"].includes(id)) clearCalculationOnly();
+      if (["startLm", "endLm", "spliceCount", "connectorCount"].includes(id)) {
+        clearCalculationOnly({ rerenderMeasurementInputs: true });
+      }
       saveDraftSoon();
     });
   });
@@ -278,8 +280,8 @@ function renderWaveConfigs(keepValues) {
     input.addEventListener("input", () => {
       collectWaveInputs();
       if (input.dataset.kind?.includes("CoreCount") || input.dataset.kind?.includes("FirstLineNo")) {
-        renderMeasurements(true);
         clearCalculationOnly();
+        renderMeasurements(true);
       } else {
         renderLiveSummary();
       }
@@ -584,14 +586,21 @@ function renderError(message) {
   $("resultCard").classList.add("hidden");
 }
 
-function clearCalculationOnly() {
+function clearCalculationOnly(options = {}) {
   latestCalculation = null;
   $("resultCard").classList.add("hidden");
-  document.querySelectorAll("[data-result]").forEach((badge) => {
-    badge.className = "badge pending";
-    badge.textContent = "未判定";
-  });
-  renderLiveSummary();
+  $("errorBox").classList.add("hidden");
+  $("errorBox").textContent = "";
+
+  if (options.rerenderMeasurementInputs) {
+    renderMeasurementInputs();
+  } else {
+    document.querySelectorAll("[data-result]").forEach((badge) => {
+      badge.className = "badge pending";
+      badge.textContent = "未判定";
+    });
+    renderLiveSummary();
+  }
 }
 
 function updateJudgements() {
