@@ -1,4 +1,4 @@
-const APP_VERSION = "fix9-auto-restore-light-backup";
+const APP_VERSION = "fix11-reset-state-verified";
 const UPDATE_CHECK_INTERVAL_MS = 3 * 60 * 1000;
 const BACKUP_INTERVAL_MS = 15 * 1000;
 const MAX_DRAFT_BACKUPS = 2;
@@ -36,6 +36,7 @@ let updateDismissedForCurrentWorker = false;
 let reloadingForUpdate = false;
 let backupDirty = false;
 let backupTimer = null;
+let isHardClearingInputs = false;
 
 const $ = (id) => document.getElementById(id);
 
@@ -148,16 +149,7 @@ function initEvents() {
   $("newDraftBtn")?.addEventListener("click", startNewDraftWithBackup);
   $("restoreBackupBtn")?.addEventListener("click", toggleBackupPanel);
   $("closeBackupPanelBtn")?.addEventListener("click", () => $("backupPanel")?.classList.add("hidden"));
-
-  $("calcForm").addEventListener("reset", () => {
-    saveBackupSnapshot("reset-before-clear", { force: true });
-    setTimeout(() => {
-      localStorage.removeItem(DRAFT_KEY);
-      resetStateAfterFormReset();
-      updateDraftStatus("入力をリセットしました。直前データはバックアップに退避済みです。");
-      renderBackupPanel();
-    }, 0);
-  });
+  $("resetInputBtn")?.addEventListener("click", resetInputsWithBackup);
 }
 
 function updateAutoSectionName() {
@@ -1078,7 +1070,7 @@ function downloadCsv(rows, filename) {
 }
 
 function downloadJsonBackup() {
-  const data = { app: "fiber-loss-smgi-wavecal-trial-fix7-protect-lengthm", exportedAt: new Date().toISOString(), records: loadRecords() };
+  const data = { app: "fiber-loss-smgi-wavecal-trial-fix11-reset-state-verified", exportedAt: new Date().toISOString(), records: loadRecords() };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -1165,21 +1157,146 @@ function renderReportSheet(record) {
   `;
 }
 
+function resetInputsWithBackup() {
+  // 明示的なリセットは「残す処理」と逆方向の最重要操作。
+  // 直前データは正式履歴には入れず、手動復元用バックアップへ退避したうえで、作業中状態を全層で消す。
+  hardClearWorkingInputState({
+    backupReason: "reset-before-clear",
+    statusMessage: "入力をリセットしました。直前データはバックアップに退避済みです。",
+    hideBackupPanel: true
+  });
+}
+
 function resetStateAfterFormReset() {
-  latestCalculation = null;
-  editingRecordId = null;
-  waveDraft = {};
-  $("resultCard").classList.add("hidden");
-  $("errorBox").classList.add("hidden");
-  $("sectionName").dataset.manual = "false";
-  $("saveBtn").textContent = "履歴に保存";
-  $("cancelEditBtn").classList.add("hidden");
-  $("spliceCount").value = 2;
-  $("connectorCount").value = 2;
-  $("cableLengthM").value = "";
-  updateWavelengthOptions();
-  renderWaveConfigs(false);
-  renderMeasurements(false);
+  hardClearWorkingInputState({
+    backupReason: "form-reset-before-clear",
+    statusMessage: "入力をリセットしました。直前データはバックアップに退避済みです。",
+    hideBackupPanel: true
+  });
+}
+
+function hardClearWorkingInputState(options = {}) {
+  const {
+    backupReason = "clear-before-reset",
+    statusMessage = "入力をリセットしました。直前データはバックアップに退避済みです。",
+    hideBackupPanel = true,
+    keepBackups = true
+  } = options;
+
+  // 1) 消す前の状態を一度だけ退避。空状態の重複バックアップは作らない。
+  if (keepBackups && hasAnyWorkingInput()) {
+    saveBackupSnapshot(backupReason, { force: true });
+  }
+
+  // 2) 遅延保存・離脱保存・再描画時collectが古いDOM値を拾わないよう、ハードクリア中フラグを立てる。
+  clearTimeout(saveDraftSoon.timer);
+  isHardClearingInputs = true;
+  suppressDraftSave = true;
+  isRestoringDraft = true;
+
+  try {
+    // 3) 永続ドラフトとメモリ状態を先に全消去。
+    localStorage.removeItem(DRAFT_KEY);
+    latestCalculation = null;
+    editingRecordId = null;
+    waveDraft = {};
+    backupDirty = false;
+
+    // 4) 固定フォームをブラウザ標準resetに頼らず明示的に初期化。
+    setValueIfExists("workNo", "");
+    setValueIfExists("siteName", "");
+    setValueIfExists("sectionName", "");
+    if ($("sectionName")) $("sectionName").dataset.manual = "false";
+    setValueIfExists("startPanel", "");
+    setValueIfExists("endPanel", "");
+    setValueIfExists("cableLengthM", "");
+    setValueIfExists("startLm", "");
+    setValueIfExists("endLm", "");
+    setValueIfExists("cableType", "SM");
+    updateWavelengthOptions();
+    setValueIfExists("wavelength", "both");
+    setValueIfExists("spliceCount", "2");
+    setValueIfExists("connectorCount", "2");
+    setValueIfExists("memo", "");
+
+    // 5) 動的入力欄・一覧・計算結果・編集状態を明示的に破棄。
+    clearContainer("wavelengthConfigList");
+    clearContainer("measureInputArea");
+    clearContainer("liveSummaryList");
+    hideInputPreview();
+    $("resultCard")?.classList.add("hidden");
+    $("errorBox")?.classList.add("hidden");
+    if ($("errorBox")) $("errorBox").textContent = "";
+    if ($("saveBtn")) $("saveBtn").textContent = "履歴に保存";
+    $("cancelEditBtn")?.classList.add("hidden");
+
+    // 6) 空の新規状態として再描画。ここで作られるwaveDraftは空値のみ。
+    renderWaveConfigs(false);
+    renderMeasurements(false);
+    assertNoWorkingMeasuredValuesAfterClear();
+
+    // 7) 再起動時に古い測定値が戻らないよう、ドラフトは最後にも削除。
+    localStorage.removeItem(DRAFT_KEY);
+  } finally {
+    isRestoringDraft = false;
+    suppressDraftSave = false;
+    isHardClearingInputs = false;
+  }
+
+  if (hideBackupPanel) $("backupPanel")?.classList.add("hidden");
+  renderBackupPanel();
+  updateDraftStatus(statusMessage);
+}
+
+function setValueIfExists(id, value) {
+  const el = $(id);
+  if (el) el.value = value;
+}
+
+function clearContainer(id) {
+  const el = $(id);
+  if (el) el.innerHTML = "";
+}
+
+function hasAnyWorkingInput() {
+  try {
+    collectWaveInputs();
+  } catch {}
+
+  const formIds = ["workNo", "siteName", "sectionName", "startPanel", "endPanel", "cableLengthM", "startLm", "endLm", "memo"];
+  if (formIds.some((id) => String($(id)?.value || "").trim() !== "")) return true;
+  if (!["SM", ""].includes(String($("cableType")?.value || ""))) return true;
+  if (!["both", ""].includes(String($("wavelength")?.value || ""))) return true;
+  if (String($("spliceCount")?.value || "2") !== "2") return true;
+  if (String($("connectorCount")?.value || "2") !== "2") return true;
+
+  return Object.values(waveDraft || {}).some((wave) => {
+    if (!wave) return false;
+    if (String(wave.startCalibration || "").trim() !== "") return true;
+    if (String(wave.endCalibration || "").trim() !== "") return true;
+    if (Number(wave.startCoreCount || 4) !== 4) return true;
+    if (Number(wave.endCoreCount || 4) !== 4) return true;
+    if (String(wave.startFirstLineNo || "1") !== "1") return true;
+    if (String(wave.endFirstLineNo || "1") !== "1") return true;
+    const hasStart = (wave.startValues || []).some((row) => String(row?.value || "").trim() !== "" || String(row?.memo || "").trim() !== "");
+    const hasEnd = (wave.endValues || []).some((row) => String(row?.value || "").trim() !== "" || String(row?.memo || "").trim() !== "");
+    return hasStart || hasEnd;
+  });
+}
+
+function assertNoWorkingMeasuredValuesAfterClear() {
+  // 本番では例外を投げず、開発時に原因を追えるよう警告だけ出す。
+  const remainingDomValues = Array.from(document.querySelectorAll(".measure-input, .line-memo-input"))
+    .map((el) => String(el.value || "").trim())
+    .filter(Boolean);
+  const remainingDraftValues = Object.values(waveDraft || []).flatMap((wave) => [
+    ...((wave.startValues || []).map((row) => row?.value || row?.memo || "")),
+    ...((wave.endValues || []).map((row) => row?.value || row?.memo || ""))
+  ]).map((v) => String(v || "").trim()).filter(Boolean);
+
+  if (remainingDomValues.length || remainingDraftValues.length) {
+    console.warn("Reset clear check: measured values remain", { remainingDomValues, remainingDraftValues });
+  }
 }
 
 
@@ -1239,13 +1356,13 @@ function setupEmergencyDraftProtection() {
 }
 
 function saveDraftSoon() {
-  if (suppressDraftSave || isRestoringDraft) return;
+  if (suppressDraftSave || isRestoringDraft || isHardClearingInputs) return;
   clearTimeout(saveDraftSoon.timer);
   saveDraftSoon.timer = setTimeout(saveDraft, 180);
 }
 
 function saveDraftNow() {
-  if (suppressDraftSave || isRestoringDraft) return false;
+  if (suppressDraftSave || isRestoringDraft || isHardClearingInputs) return false;
   clearTimeout(saveDraftSoon.timer);
   return saveDraft();
 }
@@ -1286,7 +1403,7 @@ function buildDraftData() {
 }
 
 function saveDraft() {
-  if (suppressDraftSave || isRestoringDraft) return false;
+  if (suppressDraftSave || isRestoringDraft || isHardClearingInputs) return false;
 
   try {
     const data = buildDraftData();
@@ -1457,7 +1574,7 @@ function saveRollingBackupIfNeeded(reason = "interval") {
 }
 
 function saveBackupSnapshot(reason = "manual", options = {}) {
-  if (suppressDraftSave || isRestoringDraft) return false;
+  if (suppressDraftSave || isRestoringDraft || isHardClearingInputs) return false;
   if (!options.force && !backupDirty) return false;
 
   try {
@@ -1494,15 +1611,11 @@ function clearDraftAndBackups(reason = "clear") {
 }
 
 function startNewDraftWithBackup() {
-  saveBackupSnapshot("manual-new-before-clear", { force: true });
-  suppressDraftSave = true;
-  localStorage.removeItem(DRAFT_KEY);
-  $("calcForm")?.reset();
-  resetStateAfterFormReset();
-  suppressDraftSave = false;
-  backupDirty = false;
-  updateDraftStatus("新規入力を開始しました。前回入力はバックアップに退避済みです。");
-  renderBackupPanel();
+  hardClearWorkingInputState({
+    backupReason: "manual-new-before-clear",
+    statusMessage: "新規入力を開始しました。前回入力はバックアップに退避済みです。",
+    hideBackupPanel: true
+  });
 }
 
 function toggleBackupPanel() {
