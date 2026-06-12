@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>SM/GI 光ケーブル規格値計算 fix8-auto-update-check-full-draft</title>
+  <title>SM/GI 光ケーブル規格値計算 fix9-auto-restore-light-backup</title>
   <meta name="theme-color" content="#12324a">
   <link rel="manifest" href="./manifest.json">
-  <link rel="stylesheet" href="./style.css?v=smgi-wavecal-trial-fix8-auto-update-check-full-draft">
+  <link rel="stylesheet" href="./style.css?v=smgi-wavecal-trial-fix9-auto-restore-light-backup">
 </head>
 <body>
 <header class="app-header">
   <h1>SM/GI 光ケーブル規格値計算</h1>
-  <p>波長別校正値 / 入力値全保存 / 3分ごと更新確認 / ケーブル長m優先 / オフラインPWA</p>
-  <p class="version-line">バージョン：<span id="appVersionLabel">fix8-auto-update-check-full-draft</span></p>
+  <p>波長別校正値 / 入力値全保存 / 自動復元 / 軽量バックアップ / 3分ごと更新確認</p>
+  <p class="version-line">バージョン：<span id="appVersionLabel">fix9-auto-restore-light-backup</span></p>
 </header>
 
 <div id="inputPreview" class="input-preview hidden" aria-live="polite">
@@ -43,6 +43,27 @@
   <section id="calcScreen" class="screen active">
     <form id="calcForm" class="card">
       <h2>基本情報</h2>
+
+      <section class="draft-tools" aria-label="自動保存とバックアップ">
+        <div class="draft-tools-head">
+          <div>
+            <strong>自動保存</strong>
+            <span id="draftStatusText" class="hint">入力値全体を自動保存します。</span>
+          </div>
+          <div class="actions draft-actions">
+            <button type="button" id="newDraftBtn" class="secondary">新規入力（現在を退避）</button>
+            <button type="button" id="restoreBackupBtn" class="secondary">バックアップ復元</button>
+          </div>
+        </div>
+        <div id="backupPanel" class="backup-panel hidden">
+          <div class="backup-panel-head">
+            <strong>バックアップ候補</strong>
+            <button type="button" id="closeBackupPanelBtn" class="secondary">閉じる</button>
+          </div>
+          <p class="hint">正式履歴ではありません。入力途中の退避データから必要なものだけ手動で復元します。</p>
+          <div id="backupList" class="backup-list"></div>
+        </div>
+      </section>
 
       <div class="grid two">
         <label>
@@ -189,7 +210,7 @@
   <section id="settingsScreen" class="screen">
     <section class="card">
       <h2>SM/GIマスター</h2>
-      <p class="hint">現在のバージョン：<span id="settingsVersionLabel">fix8-auto-update-check-full-draft</span></p>
+      <p class="hint">現在のバージョン：<span id="settingsVersionLabel">fix9-auto-restore-light-backup</span></p>
       <p class="hint">規格値・測定値・校正値は小数第2位表示。</p>
       <pre id="masterPreview" class="code-preview"></pre>
     </section>
@@ -207,6 +228,6 @@
   <div id="reportContent" class="report-content"></div>
 </div>
 
-<script src="./app.js?v=smgi-wavecal-trial-fix8-auto-update-check-full-draft"></script>
+<script src="./app.js?v=smgi-wavecal-trial-fix9-auto-restore-light-backup"></script>
 </body>
 </html>

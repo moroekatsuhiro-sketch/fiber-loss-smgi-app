@@ -1,10 +1,10 @@
-const CACHE_NAME = "fiber-loss-smgi-wavecal-trial-fix8-auto-update-check-full-draft-v1";
+const CACHE_NAME = "fiber-loss-smgi-wavecal-trial-fix9-auto-restore-light-backup-v1";
 
 const ASSETS = [
   "./",
   "./index.html",
-  "./style.css?v=smgi-wavecal-trial-fix8-auto-update-check-full-draft",
-  "./app.js?v=smgi-wavecal-trial-fix8-auto-update-check-full-draft",
+  "./style.css?v=smgi-wavecal-trial-fix9-auto-restore-light-backup",
+  "./app.js?v=smgi-wavecal-trial-fix9-auto-restore-light-backup",
   "./manifest.json",
   "./icon-192.png",
   "./icon-512.png"
@@ -26,7 +26,8 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("message", (event) => {
   if (event.data && event.data.type === "SKIP_WAITING") {
-    }
+    self.skipWaiting();
+  }
 });
 
 self.addEventListener("fetch", (event) => {

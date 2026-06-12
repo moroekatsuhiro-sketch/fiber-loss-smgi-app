@@ -1,7 +1,10 @@
-const APP_VERSION = "fix8-auto-update-check-full-draft";
+const APP_VERSION = "fix9-auto-restore-light-backup";
 const UPDATE_CHECK_INTERVAL_MS = 3 * 60 * 1000;
+const BACKUP_INTERVAL_MS = 15 * 1000;
+const MAX_DRAFT_BACKUPS = 2;
 const STORAGE_KEY = "fiberLossSmgiWaveCalTrialRecordsV1";
 const DRAFT_KEY = "fiberLossSmgiWaveCalTrialDraftV1";
+const DRAFT_BACKUP_KEY = "fiberLossSmgiWaveCalTrialDraftBackupsV1";
 
 const smgiMaster = {
   SM: {
@@ -31,6 +34,8 @@ let updateCheckTimer = null;
 let updateChecking = false;
 let updateDismissedForCurrentWorker = false;
 let reloadingForUpdate = false;
+let backupDirty = false;
+let backupTimer = null;
 
 const $ = (id) => document.getElementById(id);
 
@@ -55,7 +60,9 @@ document.addEventListener("DOMContentLoaded", () => {
   initEvents();
   initAppVersionDisplay();
   initPwaUpdateNotice();
+  initDraftBackupUi();
   setupEmergencyDraftProtection();
+  startLightBackupScheduler();
   updateWavelengthOptions();
   renderWaveConfigs(true);
   renderMeasurements(true);
@@ -138,11 +145,17 @@ function initEvents() {
   $("printReportBtn")?.addEventListener("click", () => window.print());
   $("applyUpdateBtn")?.addEventListener("click", applyPendingPwaUpdate);
   $("dismissUpdateBtn")?.addEventListener("click", dismissPwaUpdateNotice);
+  $("newDraftBtn")?.addEventListener("click", startNewDraftWithBackup);
+  $("restoreBackupBtn")?.addEventListener("click", toggleBackupPanel);
+  $("closeBackupPanelBtn")?.addEventListener("click", () => $("backupPanel")?.classList.add("hidden"));
 
   $("calcForm").addEventListener("reset", () => {
+    saveBackupSnapshot("reset-before-clear", { force: true });
     setTimeout(() => {
       localStorage.removeItem(DRAFT_KEY);
       resetStateAfterFormReset();
+      updateDraftStatus("入力をリセットしました。直前データはバックアップに退避済みです。");
+      renderBackupPanel();
     }, 0);
   });
 }
@@ -735,7 +748,7 @@ function handleSave() {
     else records.unshift(record);
     saveRecords(records);
     cancelEditMode(false);
-    localStorage.removeItem(DRAFT_KEY);
+    clearDraftAndBackups("saved");
     renderHistory();
     alert("履歴を更新しました。");
     return;
@@ -743,7 +756,7 @@ function handleSave() {
 
   records.unshift(record);
   saveRecords(records);
-  localStorage.removeItem(DRAFT_KEY);
+  clearDraftAndBackups("saved");
   renderHistory();
   alert("履歴に保存しました。");
 }
@@ -1218,10 +1231,10 @@ function showDraftSaveWarning(error) {
 }
 
 function setupEmergencyDraftProtection() {
-  window.addEventListener("pagehide", saveDraftNow);
-  window.addEventListener("beforeunload", saveDraftNow);
+  window.addEventListener("pagehide", () => saveDraftAndBackupNow("pagehide"));
+  window.addEventListener("beforeunload", () => saveDraftAndBackupNow("beforeunload"));
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") saveDraftNow();
+    if (document.visibilityState === "hidden") saveDraftAndBackupNow("hidden");
   });
 }
 
@@ -1237,37 +1250,49 @@ function saveDraftNow() {
   return saveDraft();
 }
 
+function saveDraftAndBackupNow(reason = "manual") {
+  const saved = saveDraftNow();
+  if (!saved) return false;
+  saveBackupSnapshot(reason, { force: true });
+  return true;
+}
+
+function buildDraftData() {
+  collectWaveInputs();
+
+  return {
+    appVersion: APP_VERSION,
+    savedAt: new Date().toISOString(),
+    editingRecordId,
+    form: {
+      workNo: $("workNo")?.value ?? "",
+      siteName: $("siteName")?.value ?? "",
+      sectionName: $("sectionName")?.value ?? "",
+      sectionManual: $("sectionName")?.dataset.manual || "false",
+      startPanel: $("startPanel")?.value ?? "",
+      endPanel: $("endPanel")?.value ?? "",
+      cableLengthM: $("cableLengthM")?.value ?? "",
+      startLm: $("startLm")?.value ?? "",
+      endLm: $("endLm")?.value ?? "",
+      cableType: $("cableType")?.value ?? "SM",
+      wavelength: $("wavelength")?.value ?? "both",
+      spliceCount: $("spliceCount")?.value ?? "2",
+      connectorCount: $("connectorCount")?.value ?? "2",
+      memo: $("memo")?.value ?? ""
+    },
+    waveDraft: structuredCloneSafe(waveDraft),
+    latestCalculation: structuredCloneSafe(latestCalculation)
+  };
+}
+
 function saveDraft() {
   if (suppressDraftSave || isRestoringDraft) return false;
 
   try {
-    collectWaveInputs();
-
-    const data = {
-      appVersion: APP_VERSION,
-      savedAt: new Date().toISOString(),
-      editingRecordId,
-      form: {
-        workNo: $("workNo")?.value ?? "",
-        siteName: $("siteName")?.value ?? "",
-        sectionName: $("sectionName")?.value ?? "",
-        sectionManual: $("sectionName")?.dataset.manual || "false",
-        startPanel: $("startPanel")?.value ?? "",
-        endPanel: $("endPanel")?.value ?? "",
-        cableLengthM: $("cableLengthM")?.value ?? "",
-        startLm: $("startLm")?.value ?? "",
-        endLm: $("endLm")?.value ?? "",
-        cableType: $("cableType")?.value ?? "SM",
-        wavelength: $("wavelength")?.value ?? "both",
-        spliceCount: $("spliceCount")?.value ?? "2",
-        connectorCount: $("connectorCount")?.value ?? "2",
-        memo: $("memo")?.value ?? ""
-      },
-      waveDraft: structuredCloneSafe(waveDraft),
-      latestCalculation: structuredCloneSafe(latestCalculation)
-    };
-
+    const data = buildDraftData();
     localStorage.setItem(DRAFT_KEY, JSON.stringify(data));
+    backupDirty = true;
+    updateDraftStatus(`自動保存済み：${formatDateTime(data.savedAt)}`);
     return true;
   } catch (error) {
     console.error("Draft save failed", error);
@@ -1278,36 +1303,26 @@ function saveDraft() {
 
 function restoreDraftIfNeeded() {
   const raw = localStorage.getItem(DRAFT_KEY);
-  if (!raw) return;
+  if (!raw) {
+    renderBackupPanel();
+    updateDraftStatus("新規入力状態です。入力すると自動保存されます。");
+    return;
+  }
 
   let draftData;
   try { draftData = JSON.parse(raw); }
   catch {
     localStorage.removeItem(DRAFT_KEY);
-    return;
-  }
-
-  const savedAt = draftData.savedAt ? formatDateTime(draftData.savedAt) : "";
-  const firstMessage = savedAt
-    ? `途中保存された入力があります。\n保存日時：${savedAt}\n\n測定値・波長別校正値を含む入力値全てを復元できます。\n復元しますか？`
-    : "途中保存された入力があります。\n\n測定値・波長別校正値を含む入力値全てを復元できます。\n復元しますか？";
-
-  if (confirm(firstMessage)) {
-    restoreDraft(draftData);
-    return;
-  }
-
-  const warningMessage =
-    "警告：途中入力を破棄しようとしています。\n\n" +
-    "復元しない場合、途中保存されている測定値・波長別校正値・工事番号・ケーブル長m・入力中の内容は削除されます。\n\n" +
-    "本当に破棄しますか？";
-
-  if (confirm(warningMessage)) {
-    localStorage.removeItem(DRAFT_KEY);
+    renderBackupPanel();
+    updateDraftStatus("前回ドラフトの読込に失敗しました。必要ならバックアップから復元してください。");
+    showBackupPanelIfAvailable();
     return;
   }
 
   restoreDraft(draftData);
+  const savedAt = draftData.savedAt ? formatDateTime(draftData.savedAt) : "時刻不明";
+  updateDraftStatus(`前回の入力を自動復元しました：${savedAt}`);
+  renderBackupPanel();
 }
 
 function restoreDraft(draftData) {
@@ -1397,6 +1412,161 @@ function normalizeRestoredSideValues(values, count, firstLineNo) {
     });
   }
   return rows;
+}
+
+
+function initDraftBackupUi() {
+  renderBackupPanel();
+  updateDraftStatus("入力値全体を自動保存します。予備バックアップは最大2世代です。");
+}
+
+function updateDraftStatus(message) {
+  const el = $("draftStatusText");
+  if (el) el.textContent = message;
+}
+
+function startLightBackupScheduler() {
+  if (backupTimer) clearInterval(backupTimer);
+  backupTimer = setInterval(() => saveRollingBackupIfNeeded("interval"), BACKUP_INTERVAL_MS);
+}
+
+function loadDraftBackups() {
+  try {
+    const backups = JSON.parse(localStorage.getItem(DRAFT_BACKUP_KEY) || "[]");
+    return Array.isArray(backups) ? backups.filter((item) => item && item.form && item.waveDraft) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveDraftBackups(backups) {
+  localStorage.setItem(DRAFT_BACKUP_KEY, JSON.stringify(backups.slice(0, MAX_DRAFT_BACKUPS)));
+}
+
+function compactDraftSignature(data) {
+  try {
+    return JSON.stringify({ form: data.form, waveDraft: data.waveDraft, latestCalculation: data.latestCalculation });
+  } catch {
+    return String(Date.now());
+  }
+}
+
+function saveRollingBackupIfNeeded(reason = "interval") {
+  if (!backupDirty) return false;
+  return saveBackupSnapshot(reason, { force: false });
+}
+
+function saveBackupSnapshot(reason = "manual", options = {}) {
+  if (suppressDraftSave || isRestoringDraft) return false;
+  if (!options.force && !backupDirty) return false;
+
+  try {
+    const data = buildDraftData();
+    const backup = {
+      ...data,
+      backupId: (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`),
+      backupReason: reason,
+      backupSavedAt: new Date().toISOString()
+    };
+
+    const signature = compactDraftSignature(backup);
+    const backups = loadDraftBackups();
+    const filtered = backups.filter((item) => compactDraftSignature(item) !== signature);
+    filtered.unshift(backup);
+    saveDraftBackups(filtered);
+    backupDirty = false;
+    renderBackupPanel();
+    updateDraftStatus(`バックアップ退避済み：${formatDateTime(backup.backupSavedAt)}`);
+    return true;
+  } catch (error) {
+    console.error("Draft backup failed", error);
+    showDraftSaveWarning(error);
+    return false;
+  }
+}
+
+function clearDraftAndBackups(reason = "clear") {
+  localStorage.removeItem(DRAFT_KEY);
+  localStorage.removeItem(DRAFT_BACKUP_KEY);
+  backupDirty = false;
+  renderBackupPanel();
+  updateDraftStatus(reason === "saved" ? "履歴保存済み。自動保存データを整理しました。" : "自動保存データを整理しました。");
+}
+
+function startNewDraftWithBackup() {
+  saveBackupSnapshot("manual-new-before-clear", { force: true });
+  suppressDraftSave = true;
+  localStorage.removeItem(DRAFT_KEY);
+  $("calcForm")?.reset();
+  resetStateAfterFormReset();
+  suppressDraftSave = false;
+  backupDirty = false;
+  updateDraftStatus("新規入力を開始しました。前回入力はバックアップに退避済みです。");
+  renderBackupPanel();
+}
+
+function toggleBackupPanel() {
+  const panel = $("backupPanel");
+  if (!panel) return;
+  renderBackupPanel();
+  panel.classList.toggle("hidden");
+}
+
+function showBackupPanelIfAvailable() {
+  if (loadDraftBackups().length > 0) {
+    renderBackupPanel();
+    $("backupPanel")?.classList.remove("hidden");
+  }
+}
+
+function renderBackupPanel() {
+  const list = $("backupList");
+  if (!list) return;
+
+  const backups = loadDraftBackups();
+  if (backups.length === 0) {
+    list.innerHTML = `<p class="hint">現在、復元できるバックアップはありません。</p>`;
+    return;
+  }
+
+  list.innerHTML = backups.map((backup, index) => {
+    const form = backup.form || {};
+    const title = form.sectionName || `${form.startPanel || "始端未入力"} ～ ${form.endPanel || "遠端未入力"}` || "入力途中データ";
+    const savedAt = backup.backupSavedAt || backup.savedAt || "";
+    const meta = [
+      savedAt ? `退避日時：${formatDateTime(savedAt)}` : "退避日時：不明",
+      form.workNo ? `工事番号：${formatWorkNo(form.workNo)}` : "工事番号：未入力",
+      form.siteName ? `現場名：${escapeHtml(form.siteName)}` : "現場名：未入力",
+      form.cableType ? `種類：${escapeHtml(form.cableType)} / 波長：${escapeHtml(form.wavelength || "")}` : ""
+    ].filter(Boolean).join(" / ");
+
+    return `
+      <div class="backup-item">
+        <div class="backup-item-main">
+          <div class="backup-item-title">${escapeHtml(title)}</div>
+          <div class="backup-item-meta">${meta}</div>
+        </div>
+        <button type="button" class="secondary restore-backup-choice" data-backup-index="${index}">このバックアップを復元</button>
+      </div>
+    `;
+  }).join("");
+
+  list.querySelectorAll(".restore-backup-choice").forEach((button) => {
+    button.addEventListener("click", () => restoreBackupByIndex(Number(button.dataset.backupIndex)));
+  });
+}
+
+function restoreBackupByIndex(index) {
+  const backups = loadDraftBackups();
+  const backup = backups[index];
+  if (!backup) return;
+
+  saveBackupSnapshot("before-manual-backup-restore", { force: true });
+  localStorage.setItem(DRAFT_KEY, JSON.stringify({ ...backup, savedAt: new Date().toISOString(), appVersion: APP_VERSION }));
+  restoreDraft(backup);
+  $("backupPanel")?.classList.add("hidden");
+  updateDraftStatus(`バックアップを復元しました：${formatDateTime(backup.backupSavedAt || backup.savedAt)}`);
+  saveDraftSoon();
 }
 
 
@@ -1727,7 +1897,7 @@ async function registerServiceWorker() {
   navigator.serviceWorker.addEventListener("controllerchange", () => {
     if (reloadingForUpdate) return;
     reloadingForUpdate = true;
-    saveDraftNow();
+    saveDraftAndBackupNow("controllerchange");
     window.location.reload();
   });
 
@@ -1782,7 +1952,7 @@ async function checkForPwaUpdate(reason = "manual") {
   updateChecking = true;
 
   try {
-    const saved = saveDraftNow();
+    const saved = saveDraftAndBackupNow(`update-check-${reason}`);
     if (!saved) return false;
 
     const registration = swRegistration || await navigator.serviceWorker.getRegistration();
@@ -1807,7 +1977,7 @@ async function checkForPwaUpdate(reason = "manual") {
 }
 
 function applyPendingPwaUpdate() {
-  const saved = saveDraftNow();
+  const saved = saveDraftAndBackupNow("apply-update");
   if (!saved) {
     alert("入力値の保存に失敗したため、更新を中止しました。ブラウザ容量やシークレットモードではないか確認してください。");
     return;
@@ -1826,7 +1996,7 @@ function applyPendingPwaUpdate() {
   setTimeout(() => {
     if (!reloadingForUpdate) {
       reloadingForUpdate = true;
-      saveDraftNow();
+      saveDraftAndBackupNow("reload-for-update");
       window.location.reload();
     }
   }, 2500);
