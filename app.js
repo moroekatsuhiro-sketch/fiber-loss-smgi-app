@@ -1,3 +1,5 @@
+const APP_VERSION = "fix8-auto-update-check-full-draft";
+const UPDATE_CHECK_INTERVAL_MS = 3 * 60 * 1000;
 const STORAGE_KEY = "fiberLossSmgiWaveCalTrialRecordsV1";
 const DRAFT_KEY = "fiberLossSmgiWaveCalTrialDraftV1";
 
@@ -23,6 +25,12 @@ let editingRecordId = null;
 let waveDraft = {};
 let isRestoringDraft = false;
 let suppressDraftSave = false;
+let swRegistration = null;
+let waitingServiceWorker = null;
+let updateCheckTimer = null;
+let updateChecking = false;
+let updateDismissedForCurrentWorker = false;
+let reloadingForUpdate = false;
 
 const $ = (id) => document.getElementById(id);
 
@@ -34,6 +42,7 @@ const previewLabels = {
   endPanel: "遠端盤名",
   startLm: "始端レングスマーク",
   endLm: "遠端レングスマーク",
+  cableLengthM: "ケーブル長 m（直接入力・最優先）",
   cableType: "ケーブル種類",
   wavelength: "波長",
   spliceCount: "融着点数",
@@ -44,6 +53,9 @@ const previewLabels = {
 document.addEventListener("DOMContentLoaded", () => {
   initNavigation();
   initEvents();
+  initAppVersionDisplay();
+  initPwaUpdateNotice();
+  setupEmergencyDraftProtection();
   updateWavelengthOptions();
   renderWaveConfigs(true);
   renderMeasurements(true);
@@ -105,9 +117,9 @@ function initEvents() {
     saveDraftSoon();
   });
 
-  ["startLm", "endLm", "spliceCount", "connectorCount", "siteName", "memo"].forEach((id) => {
+  ["cableLengthM", "startLm", "endLm", "spliceCount", "connectorCount", "siteName", "memo"].forEach((id) => {
     $(id).addEventListener("input", () => {
-      if (["startLm", "endLm", "spliceCount", "connectorCount"].includes(id)) {
+      if (["cableLengthM", "startLm", "endLm", "spliceCount", "connectorCount"].includes(id)) {
         clearCalculationOnly({ rerenderMeasurementInputs: true });
       }
       saveDraftSoon();
@@ -124,6 +136,8 @@ function initEvents() {
   $("importJsonFile").addEventListener("change", importJsonBackup);
   $("closeReportBtn")?.addEventListener("click", closeReportModal);
   $("printReportBtn")?.addEventListener("click", () => window.print());
+  $("applyUpdateBtn")?.addEventListener("click", applyPendingPwaUpdate);
+  $("dismissUpdateBtn")?.addEventListener("click", dismissPwaUpdateNotice);
 
   $("calcForm").addEventListener("reset", () => {
     setTimeout(() => {
@@ -242,11 +256,11 @@ function renderWaveConfigs(keepValues) {
         <div class="grid two">
           <label>
             ${wave}nm 始点校正値 dB
-            <input id="startCalibration_${wave}" class="wave-config-input calibration-input" data-wave="${wave}" data-kind="startCalibration" type="number" inputmode="decimal" step="0.01" value="${escapeHtml(d.startCalibration ?? "")}" placeholder="例：0.00">
+            <input id="startCalibration_${wave}" class="wave-config-input calibration-input" data-wave="${wave}" data-kind="startCalibration" type="text" inputmode="decimal" autocomplete="off" value="${escapeHtml(d.startCalibration ?? "")}" placeholder="例：0.00">
           </label>
           <label>
             ${wave}nm 終点校正値 dB
-            <input id="endCalibration_${wave}" class="wave-config-input calibration-input" data-wave="${wave}" data-kind="endCalibration" type="number" inputmode="decimal" step="0.01" value="${escapeHtml(d.endCalibration ?? "")}" placeholder="例：0.00">
+            <input id="endCalibration_${wave}" class="wave-config-input calibration-input" data-wave="${wave}" data-kind="endCalibration" type="text" inputmode="decimal" autocomplete="off" value="${escapeHtml(d.endCalibration ?? "")}" placeholder="例：0.00">
           </label>
         </div>
 
@@ -309,6 +323,7 @@ function renderMeasurements(keepValues) {
 function renderMeasurementInputs() {
   const target = $("measureInputArea");
   if (!target) return;
+  if (!isRestoringDraft) collectWaveInputs();
 
   const waves = latestCalculation?.wavelengths || getSelectedWavelengths();
 
@@ -324,7 +339,7 @@ function renderMeasurementInputs() {
       collectWaveInputs();
       updateJudgements();
       renderLiveSummary();
-      saveDraftSoon();
+      saveDraftNow();
       updatePreviewForActiveElement();
     });
     input.addEventListener("blur", () => {
@@ -332,7 +347,7 @@ function renderMeasurementInputs() {
       collectWaveInputs();
       updateJudgements();
       renderLiveSummary();
-      saveDraftSoon();
+      saveDraftNow();
     });
   });
 
@@ -341,7 +356,7 @@ function renderMeasurementInputs() {
     input.addEventListener("input", () => {
       collectWaveInputs();
       renderLiveSummary();
-      saveDraftSoon();
+      saveDraftNow();
       updatePreviewForActiveElement();
     });
   });
@@ -375,7 +390,7 @@ function renderSideInput(wave, side, title, count, firstLineNo, calibration, val
       <div class="list-row">
         <div class="line-no">${escapeHtml(lineNo)}</div>
         <div>
-          <input class="measure-input" data-wave="${wave}" data-side="${side}" data-index="${i}" data-line-no="${escapeHtml(lineNo)}" type="number" inputmode="decimal" step="0.01" min="0" value="${escapeHtml(row.value ?? "")}" placeholder="測定値 dB">
+          <input class="measure-input" data-wave="${wave}" data-side="${side}" data-index="${i}" data-line-no="${escapeHtml(lineNo)}" type="text" inputmode="decimal" autocomplete="off" value="${escapeHtml(row.value ?? "")}" placeholder="測定値 dB">
         </div>
         <div><span class="badge pending" data-result="${wave}-${side}-${i}">未判定</span></div>
         <div class="memo-cell">
@@ -472,10 +487,30 @@ function handleCalculate() {
 
 function getBaseInput() {
   const workNo = validateWorkNo();
-  const startLm = getNumber("startLm", "始端レングスマーク");
-  const endLm = getNumber("endLm", "遠端レングスマーク");
-  const lengthM = Math.abs(endLm - startLm);
-  if (lengthM <= 0) throw new Error("始端と遠端のレングスマークに差がありません。");
+  const cableLengthMDirect = getOptionalNumber("cableLengthM", "ケーブル長m", 0);
+  const startLm = toNullableNumber($("startLm").value);
+  const endLm = toNullableNumber($("endLm").value);
+  const lengthMarkM = startLm !== null && endLm !== null ? Math.abs(endLm - startLm) : null;
+
+  let lengthM;
+  let lengthSource;
+  let lengthSourceLabel;
+
+  if (cableLengthMDirect !== null) {
+    lengthM = cableLengthMDirect;
+    lengthSource = "direct";
+    lengthSourceLabel = "ケーブル長m直接入力";
+  } else {
+    if (startLm === null) throw new Error("ケーブル長mが空欄の場合は、始端レングスマークを入力してください。");
+    if (endLm === null) throw new Error("ケーブル長mが空欄の場合は、遠端レングスマークを入力してください。");
+    lengthM = lengthMarkM;
+    lengthSource = "lengthMark";
+    lengthSourceLabel = "レングスマーク差";
+  }
+
+  if (!Number.isFinite(lengthM) || lengthM <= 0) {
+    throw new Error("ケーブル長は0mより大きい値で入力してください。");
+  }
 
   return {
     workNo,
@@ -484,10 +519,14 @@ function getBaseInput() {
     sectionName: $("sectionName").value.trim(),
     startPanel: $("startPanel").value.trim(),
     endPanel: $("endPanel").value.trim(),
+    cableLengthMInput: $("cableLengthM").value.trim(),
     startLm,
     endLm,
+    lengthMarkM,
     lengthM,
     lengthKm: lengthM / 1000,
+    lengthSource,
+    lengthSourceLabel,
     cableType: $("cableType").value,
     wavelengths: getSelectedWavelengths(),
     spliceCount: Math.floor(getNumber("spliceCount", "融着点数", 0)),
@@ -558,6 +597,9 @@ function renderCalculation(calc) {
   const rows = [
     ["工事番号", calc.workNoDisplay],
     ["ケーブル長", `${formatNumber(calc.lengthM, 3)} m / ${formatNumber(calc.lengthKm, 6)} km`],
+    ["ケーブル長入力方式", calc.lengthSourceLabel || "レングスマーク差"],
+    ["直接入力ケーブル長", calc.cableLengthMInput ? `${formatFixedTruncated(calc.cableLengthMInput, 3)} m（最優先）` : "未入力"],
+    ["レングスマーク差", calc.lengthMarkM !== null && calc.lengthMarkM !== undefined ? `${formatNumber(calc.lengthMarkM, 3)} m` : "未入力"],
     ["ケーブル種類", calc.cableType],
     ["波長", calc.wavelengths.map((w) => `${w}nm`).join(" / ")],
     ["融着点数", `${calc.spliceCount}点`],
@@ -569,8 +611,8 @@ function renderCalculation(calc) {
   calc.wavelengths.forEach((wave) => {
     const r = calc.results[String(wave)];
     const s = calc.waveSettings[String(wave)];
-    rows.push([`${wave}nm 校正値`, `始点 ${formatCalibrationDisplay(s.startCalibration)} dB / 終点 ${formatCalibrationDisplay(s.endCalibration)} dB（記録用のみ）`]);
-    rows.push([`${wave}nm 芯線数`, `始端 ${s.startCoreCount}芯 / 遠端 ${s.endCoreCount}芯`]);
+    rows.push([`${wave}nm 校正値`, `始点 ${formatCalibrationDisplay(s?.startCalibration)} dB / 終点 ${formatCalibrationDisplay(s?.endCalibration)} dB（記録用のみ）`]);
+    rows.push([`${wave}nm 芯線数`, `始端 ${s?.startCoreCount ?? 0}芯 / 遠端 ${s?.endCoreCount ?? 0}芯`]);
     rows.push([`${wave}nm 内訳`, `ケーブル ${formatNumber(r.cableLossValue, 6)} + 融着 ${formatNumber(r.spliceLossValue, 6)} + コネクタ ${formatNumber(r.connectorLossValue, 6)} = ${r.displayStandardValue} dB`]);
   });
 
@@ -589,6 +631,7 @@ function renderError(message) {
 }
 
 function clearCalculationOnly(options = {}) {
+  if (!isRestoringDraft) collectWaveInputs();
   latestCalculation = null;
   $("resultCard").classList.add("hidden");
   $("errorBox").classList.add("hidden");
@@ -778,6 +821,7 @@ function renderRecordDetail(record) {
       <div><strong>始端盤名</strong><span>${escapeHtml(record.startPanel || "")}</span></div>
       <div><strong>遠端盤名</strong><span>${escapeHtml(record.endPanel || "")}</span></div>
       <div><strong>ケーブル長</strong><span>${formatNumber(record.lengthM, 3)}m / ${formatNumber(record.lengthKm, 6)}km</span></div>
+      <div><strong>長さ入力方式</strong><span>${escapeHtml(record.lengthSourceLabel || "レングスマーク差")}</span></div>
       <div><strong>融着 / コネクタ</strong><span>${record.spliceCount}点 / ${record.connectorCount}個</span></div>
     </div>
     ${record.wavelengths.map((wave) => renderSavedWave(record, String(wave))).join("")}
@@ -843,6 +887,7 @@ function startEditRecord(id) {
   $("endPanel").value = record.endPanel || "";
   $("startLm").value = record.startLm ?? "";
   $("endLm").value = record.endLm ?? "";
+  $("cableLengthM").value = record.cableLengthMInput ?? (record.lengthSource === "direct" ? formatNumber(record.lengthM, 3) : "");
   $("cableType").value = record.cableType || "SM";
   updateWavelengthOptions();
   $("wavelength").value = record.wavelengths?.length > 1 ? "both" : String(record.wavelengths?.[0] || $("wavelength").value);
@@ -934,7 +979,7 @@ function clearAllRecords() {
 
 function buildCsvRows(records) {
   const headers = [
-    "保存日時","工事番号","現場名","区間名","始端盤名","遠端盤名","始端LM","遠端LM","ケーブル長m","ケーブル長km",
+    "保存日時","工事番号","現場名","区間名","始端盤名","遠端盤名","始端LM","遠端LM","ケーブル長入力方式","直接入力ケーブル長m","LM差m","使用ケーブル長m","使用ケーブル長km",
     "ケーブル種類","波長","融着点数","コネクタ数","規格値","測定方向","芯線数","線番","測定値","判定",
     "始点校正値","終点校正値","使用校正値種別","使用校正値","メモ","区間メモ"
   ];
@@ -959,8 +1004,11 @@ function buildCsvRows(records) {
             record.sectionName,
             record.startPanel,
             record.endPanel,
-            record.startLm,
-            record.endLm,
+            formatNullableNumber(record.startLm, 3),
+            formatNullableNumber(record.endLm, 3),
+            record.lengthSourceLabel || "レングスマーク差",
+            record.cableLengthMInput ? formatFixedTruncated(record.cableLengthMInput, 3) : "",
+            formatNullableNumber(record.lengthMarkM, 3),
             formatNumber(record.lengthM, 3),
             formatNumber(record.lengthKm, 6),
             record.cableType,
@@ -1017,7 +1065,7 @@ function downloadCsv(rows, filename) {
 }
 
 function downloadJsonBackup() {
-  const data = { app: "fiber-loss-smgi-wavecal-trial", exportedAt: new Date().toISOString(), records: loadRecords() };
+  const data = { app: "fiber-loss-smgi-wavecal-trial-fix7-protect-lengthm", exportedAt: new Date().toISOString(), records: loadRecords() };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -1089,6 +1137,9 @@ function renderReportSheet(record) {
         <div class="report-info-item"><strong>始端盤名</strong><span>${escapeHtml(record.startPanel || "")}</span></div>
         <div class="report-info-item"><strong>遠端盤名</strong><span>${escapeHtml(record.endPanel || "")}</span></div>
         <div class="report-info-item"><strong>ケーブル長</strong><span>${formatNumber(record.lengthM, 3)} m / ${formatNumber(record.lengthKm, 6)} km</span></div>
+        <div class="report-info-item"><strong>長さ入力方式</strong><span>${escapeHtml(record.lengthSourceLabel || "レングスマーク差")}</span></div>
+        <div class="report-info-item"><strong>直接入力ケーブル長</strong><span>${record.cableLengthMInput ? formatFixedTruncated(record.cableLengthMInput, 3) + " m" : "-"}</span></div>
+        <div class="report-info-item"><strong>LM差</strong><span>${formatNullableNumber(record.lengthMarkM, 3) || "-"} m</span></div>
         <div class="report-info-item"><strong>ケーブル種類</strong><span>${escapeHtml(record.cableType || "")}</span></div>
         <div class="report-info-item"><strong>波長</strong><span>${record.wavelengths.map((w) => `${w}nm`).join(" / ")}</span></div>
         <div class="report-info-item"><strong>融着 / コネクタ</strong><span>${record.spliceCount}点 / ${record.connectorCount}個</span></div>
@@ -1112,9 +1163,66 @@ function resetStateAfterFormReset() {
   $("cancelEditBtn").classList.add("hidden");
   $("spliceCount").value = 2;
   $("connectorCount").value = 2;
+  $("cableLengthM").value = "";
   updateWavelengthOptions();
   renderWaveConfigs(false);
   renderMeasurements(false);
+}
+
+
+function initAppVersionDisplay() {
+  const labels = [$("appVersionLabel"), $("settingsVersionLabel")].filter(Boolean);
+  labels.forEach((label) => { label.textContent = APP_VERSION; });
+}
+
+function initPwaUpdateNotice() {
+  const notice = $("updateNotice");
+  if (!notice) return;
+  notice.classList.add("hidden");
+}
+
+function showPwaUpdateNotice(message = "新しいバージョンがあります。入力値を全保存してから更新できます。") {
+  const notice = $("updateNotice");
+  if (!notice || updateDismissedForCurrentWorker) return;
+  const text = $("updateNoticeText");
+  if (text) text.textContent = message;
+  notice.classList.remove("hidden");
+}
+
+function dismissPwaUpdateNotice() {
+  updateDismissedForCurrentWorker = true;
+  $("updateNotice")?.classList.add("hidden");
+}
+
+function setPwaUpdateNoticeText(message) {
+  const text = $("updateNoticeText");
+  if (text) text.textContent = message;
+}
+
+function structuredCloneSafe(value) {
+  if (value === null || value === undefined) return value;
+  try {
+    if (typeof structuredClone === "function") return structuredClone(value);
+  } catch {}
+  try { return JSON.parse(JSON.stringify(value)); }
+  catch { return value; }
+}
+
+function showDraftSaveWarning(error) {
+  const message = error?.message ? `入力値の自動保存に失敗しました：${error.message}` : "入力値の自動保存に失敗しました。";
+  const box = $("errorBox");
+  if (box) {
+    box.classList.remove("hidden");
+    box.textContent = message;
+  }
+}
+
+function setupEmergencyDraftProtection() {
+  window.addEventListener("pagehide", saveDraftNow);
+  window.addEventListener("beforeunload", saveDraftNow);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") saveDraftNow();
+  });
 }
 
 function saveDraftSoon() {
@@ -1123,30 +1231,49 @@ function saveDraftSoon() {
   saveDraftSoon.timer = setTimeout(saveDraft, 180);
 }
 
+function saveDraftNow() {
+  if (suppressDraftSave || isRestoringDraft) return false;
+  clearTimeout(saveDraftSoon.timer);
+  return saveDraft();
+}
+
 function saveDraft() {
-  if (suppressDraftSave || isRestoringDraft) return;
-  collectWaveInputs();
-  const data = {
-    savedAt: new Date().toISOString(),
-    form: {
-      workNo: $("workNo").value,
-      siteName: $("siteName").value,
-      sectionName: $("sectionName").value,
-      sectionManual: $("sectionName").dataset.manual || "false",
-      startPanel: $("startPanel").value,
-      endPanel: $("endPanel").value,
-      startLm: $("startLm").value,
-      endLm: $("endLm").value,
-      cableType: $("cableType").value,
-      wavelength: $("wavelength").value,
-      spliceCount: $("spliceCount").value,
-      connectorCount: $("connectorCount").value,
-      memo: $("memo").value
-    },
-    waveDraft,
-    latestCalculation
-  };
-  localStorage.setItem(DRAFT_KEY, JSON.stringify(data));
+  if (suppressDraftSave || isRestoringDraft) return false;
+
+  try {
+    collectWaveInputs();
+
+    const data = {
+      appVersion: APP_VERSION,
+      savedAt: new Date().toISOString(),
+      editingRecordId,
+      form: {
+        workNo: $("workNo")?.value ?? "",
+        siteName: $("siteName")?.value ?? "",
+        sectionName: $("sectionName")?.value ?? "",
+        sectionManual: $("sectionName")?.dataset.manual || "false",
+        startPanel: $("startPanel")?.value ?? "",
+        endPanel: $("endPanel")?.value ?? "",
+        cableLengthM: $("cableLengthM")?.value ?? "",
+        startLm: $("startLm")?.value ?? "",
+        endLm: $("endLm")?.value ?? "",
+        cableType: $("cableType")?.value ?? "SM",
+        wavelength: $("wavelength")?.value ?? "both",
+        spliceCount: $("spliceCount")?.value ?? "2",
+        connectorCount: $("connectorCount")?.value ?? "2",
+        memo: $("memo")?.value ?? ""
+      },
+      waveDraft: structuredCloneSafe(waveDraft),
+      latestCalculation: structuredCloneSafe(latestCalculation)
+    };
+
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(data));
+    return true;
+  } catch (error) {
+    console.error("Draft save failed", error);
+    showDraftSaveWarning(error);
+    return false;
+  }
 }
 
 function restoreDraftIfNeeded() {
@@ -1162,8 +1289,8 @@ function restoreDraftIfNeeded() {
 
   const savedAt = draftData.savedAt ? formatDateTime(draftData.savedAt) : "";
   const firstMessage = savedAt
-    ? `途中保存された入力があります。\n保存日時：${savedAt}\n\n測定値・波長別校正値も復元できます。\n復元しますか？`
-    : "途中保存された入力があります。\n\n測定値・波長別校正値も復元できます。\n復元しますか？";
+    ? `途中保存された入力があります。\n保存日時：${savedAt}\n\n測定値・波長別校正値を含む入力値全てを復元できます。\n復元しますか？`
+    : "途中保存された入力があります。\n\n測定値・波長別校正値を含む入力値全てを復元できます。\n復元しますか？";
 
   if (confirm(firstMessage)) {
     restoreDraft(draftData);
@@ -1172,7 +1299,7 @@ function restoreDraftIfNeeded() {
 
   const warningMessage =
     "警告：途中入力を破棄しようとしています。\n\n" +
-    "復元しない場合、途中保存されている測定値・波長別校正値・工事番号・入力中の内容は削除されます。\n\n" +
+    "復元しない場合、途中保存されている測定値・波長別校正値・工事番号・ケーブル長m・入力中の内容は削除されます。\n\n" +
     "本当に破棄しますか？";
 
   if (confirm(warningMessage)) {
@@ -1187,6 +1314,7 @@ function restoreDraft(draftData) {
   isRestoringDraft = true;
 
   const form = draftData.form || {};
+  editingRecordId = draftData.editingRecordId || editingRecordId || null;
 
   $("workNo").value = form.workNo || "";
   $("siteName").value = form.siteName || "";
@@ -1194,6 +1322,7 @@ function restoreDraft(draftData) {
   $("sectionName").dataset.manual = form.sectionManual || "false";
   $("startPanel").value = form.startPanel || "";
   $("endPanel").value = form.endPanel || "";
+  $("cableLengthM").value = form.cableLengthM || "";
   $("startLm").value = form.startLm || "";
   $("endLm").value = form.endLm || "";
   $("cableType").value = form.cableType || "SM";
@@ -1225,8 +1354,14 @@ function restoreDraft(draftData) {
 function normalizeRestoredWaveDraft(restored, restoredCalculation) {
   const out = {};
   const selected = getSelectedWavelengths().map(String);
+  const waveKeys = new Set([
+    ...Object.keys(restored || {}),
+    ...Object.keys(restoredCalculation?.waveSettings || {}),
+    ...Object.keys(restoredCalculation?.measurements || {}),
+    ...selected
+  ]);
 
-  selected.forEach((wave) => {
+  waveKeys.forEach((wave) => {
     const src = restored[String(wave)] || {};
     const calcSettings = restoredCalculation?.waveSettings?.[String(wave)] || {};
     const calcMeasurements = restoredCalculation?.measurements?.[String(wave)] || {};
@@ -1358,7 +1493,8 @@ function getPreviewContext(el) {
     const sideLabel = side === "start" ? "始端側→遠端側" : "遠端側→始端側";
     const line = el.dataset.lineNo || "";
     const raw = el.value;
-    const value = raw !== "" && Number.isFinite(Number(raw)) ? `${formatFixedTruncated(raw, 2)} dB` : "未入力";
+    const parsed = toNullableNumber(raw);
+    const value = parsed !== null ? `${formatFixedTruncated(parsed, 2)} dB` : "未入力";
     const d = ensureWave(wave);
     const calibration = side === "start" ? d.startCalibration : d.endCalibration;
     const calLabel = side === "start" ? "始点校正値" : "終点校正値";
@@ -1406,7 +1542,7 @@ function getPreviewContext(el) {
   let value = el.value || "";
 
   if (id === "workNo") value = value ? formatWorkNo(value) || value : "";
-  else if (id === "startLm" || id === "endLm") value = value ? `${value} m` : "";
+  else if (id === "cableLengthM" || id === "startLm" || id === "endLm") value = value ? `${value} m` : "";
   else if (id === "spliceCount") value = value ? `${value} 点` : "";
   else if (id === "connectorCount") value = value ? `${value} 個` : "";
   else if (id === "wavelength") value = getSelectedWavelengths().map((w) => `${w}nm`).join(" / ");
@@ -1432,9 +1568,18 @@ function formatWorkNo(raw) {
 
 function getNumber(id, label, min = null) {
   const raw = $(id).value;
-  const value = Number(raw);
-  if (raw === "" || !Number.isFinite(value)) throw new Error(`${label}を入力してください。`);
+  const value = toNullableNumber(raw);
+  if (value === null) throw new Error(`${label}を入力してください。`);
   if (min !== null && value < min) throw new Error(`${label}は${min}以上で入力してください。`);
+  return value;
+}
+
+function getOptionalNumber(id, label, min = null) {
+  const raw = $(id).value;
+  if (raw === null || raw === undefined || String(raw).trim() === "") return null;
+  const value = toNullableNumber(raw);
+  if (value === null) throw new Error(`${label}は数値で入力してください。`);
+  if (min !== null && value <= min) throw new Error(`${label}は${min}より大きい値で入力してください。`);
   return value;
 }
 
@@ -1451,8 +1596,10 @@ function incrementLineLabel(baseLabel, offset) {
 
 function getResultForValue(raw, standard) {
   const value = toNullableNumber(raw);
-  if (value === null || standard === undefined) return "未判定";
-  return value <= standard ? "OK" : "NG";
+  if (value === null || standard === undefined || standard === null) return "未判定";
+  const judgedValue = truncateNumber(value, 2);
+  const judgedStandard = truncateNumber(standard, 2);
+  return judgedValue <= judgedStandard ? "OK" : "NG";
 }
 
 function formatAllCalibrationInputs() {
@@ -1462,8 +1609,8 @@ function formatAllCalibrationInputs() {
 
 function formatCalibrationInput(input) {
   if (!input || input.value === "") return;
-  const value = Number(input.value);
-  if (Number.isFinite(value)) input.value = formatFixedTruncated(value, 2);
+  const value = toNullableNumber(input.value);
+  if (value !== null) input.value = formatFixedTruncated(value, 2);
 }
 
 function formatCalibrationInputValue(value) {
@@ -1478,8 +1625,8 @@ function formatCalibrationDisplay(value) {
 
 function formatMeasuredInput(input) {
   if (!input || input.value === "") return;
-  const value = Number(input.value);
-  if (Number.isFinite(value)) input.value = formatFixedTruncated(value, 2);
+  const value = toNullableNumber(input.value);
+  if (value !== null) input.value = formatFixedTruncated(value, 2);
 }
 
 function formatMeasuredValue(value) {
@@ -1487,27 +1634,49 @@ function formatMeasuredValue(value) {
   return formatFixedTruncated(value, 2);
 }
 
+function normalizeNumericString(value) {
+  if (value === null || value === undefined) return "";
+  return String(value)
+    .trim()
+    .replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+    .replace(/[．。]/g, ".")
+    .replace(/[，、]/g, ",")
+    .replace(/[－ー―]/g, "-")
+    .replace(/,/g, "");
+}
+
 function toNullableNumber(value) {
-  if (value === "" || value === null || value === undefined) return null;
-  const number = Number(value);
+  const normalized = normalizeNumericString(value);
+  if (normalized === "") return null;
+  if (!/^-?(?:\d+\.?\d*|\.\d+)$/.test(normalized)) return null;
+  const number = Number(normalized);
   return Number.isFinite(number) ? number : null;
 }
 
 function truncateNumber(value, digits = 2) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return 0;
+  const number = toNullableNumber(value);
+  if (number === null) return 0;
   const factor = 10 ** digits;
-  return number < 0 ? Math.ceil(number * factor) / factor : Math.floor(number * factor) / factor;
+  const scaled = number * factor;
+  const correction = 1e-8;
+  return number < 0
+    ? Math.ceil(scaled - correction) / factor
+    : Math.floor(scaled + correction) / factor;
 }
 
 function formatFixedTruncated(value, digits = 2) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return "";
+  const number = toNullableNumber(value);
+  if (number === null) return "";
   return truncateNumber(number, digits).toFixed(digits);
 }
 
 function formatNumber(value, digits) {
   return formatFixedTruncated(value, digits).replace(/\.?0+$/, "");
+}
+
+function formatNullableNumber(value, digits) {
+  if (value === null || value === undefined || value === "") return "";
+  return formatNumber(value, digits);
 }
 
 function formatDateTime(iso) {
@@ -1552,8 +1721,113 @@ function resultClass(result) {
   return result === "OK" ? "ok" : result === "NG" ? "ng" : "pending";
 }
 
-function registerServiceWorker() {
-  if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./service-worker.js").catch(() => {});
+async function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return null;
+
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (reloadingForUpdate) return;
+    reloadingForUpdate = true;
+    saveDraftNow();
+    window.location.reload();
+  });
+
+  try {
+    const registration = await navigator.serviceWorker.register("./service-worker.js");
+    swRegistration = registration;
+    watchServiceWorkerRegistration(registration);
+    startPwaUpdateWatcher();
+    return registration;
+  } catch (error) {
+    console.warn("Service Worker registration failed", error);
+    return null;
   }
+}
+
+function watchServiceWorkerRegistration(registration) {
+  if (!registration) return;
+
+  if (registration.waiting && navigator.serviceWorker.controller) {
+    waitingServiceWorker = registration.waiting;
+    showPwaUpdateNotice();
+  }
+
+  registration.addEventListener("updatefound", () => {
+    const newWorker = registration.installing;
+    if (!newWorker) return;
+
+    newWorker.addEventListener("statechange", () => {
+      if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
+        waitingServiceWorker = newWorker;
+        updateDismissedForCurrentWorker = false;
+        showPwaUpdateNotice("新しいバージョンの準備ができました。入力値を全保存してから更新できます。");
+      }
+    });
+  });
+}
+
+function startPwaUpdateWatcher() {
+  if (!("serviceWorker" in navigator)) return;
+  if (updateCheckTimer) clearInterval(updateCheckTimer);
+
+  setTimeout(() => checkForPwaUpdate("startup"), 8000);
+  updateCheckTimer = setInterval(() => checkForPwaUpdate("interval"), UPDATE_CHECK_INTERVAL_MS);
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") checkForPwaUpdate("visible");
+  });
+}
+
+async function checkForPwaUpdate(reason = "manual") {
+  if (updateChecking || !("serviceWorker" in navigator)) return false;
+  updateChecking = true;
+
+  try {
+    const saved = saveDraftNow();
+    if (!saved) return false;
+
+    const registration = swRegistration || await navigator.serviceWorker.getRegistration();
+    if (!registration) return false;
+    swRegistration = registration;
+
+    await registration.update();
+
+    if (registration.waiting && navigator.serviceWorker.controller) {
+      waitingServiceWorker = registration.waiting;
+      showPwaUpdateNotice();
+      return true;
+    }
+
+    return false;
+  } catch (error) {
+    console.warn(`PWA update check failed (${reason})`, error);
+    return false;
+  } finally {
+    updateChecking = false;
+  }
+}
+
+function applyPendingPwaUpdate() {
+  const saved = saveDraftNow();
+  if (!saved) {
+    alert("入力値の保存に失敗したため、更新を中止しました。ブラウザ容量やシークレットモードではないか確認してください。");
+    return;
+  }
+
+  const worker = waitingServiceWorker || swRegistration?.waiting;
+  if (!worker) {
+    setPwaUpdateNoticeText("更新準備を確認中です。数秒後にもう一度押してください。");
+    checkForPwaUpdate("apply-button");
+    return;
+  }
+
+  setPwaUpdateNoticeText("入力値を保存しました。更新を適用しています…");
+  worker.postMessage({ type: "SKIP_WAITING" });
+
+  setTimeout(() => {
+    if (!reloadingForUpdate) {
+      reloadingForUpdate = true;
+      saveDraftNow();
+      window.location.reload();
+    }
+  }, 2500);
 }

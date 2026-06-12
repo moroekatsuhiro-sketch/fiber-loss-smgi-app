@@ -1,7 +1,7 @@
 {
-  "name": "SM/GI 光ケーブル規格値計算 試作版",
-  "short_name": "SMGI試作",
-  "description": "SM/GI光ケーブルの波長別校正値・波長別芯線数・測定値一覧を管理するPWA試作版です。",
+  "name": "SM/GI 光ケーブル規格値計算 fix8",
+  "short_name": "SMGI fix7",
+  "description": "SM/GI光ケーブルの波長別校正値・測定値・入力値全保存・PWA更新確認に対応した試作版です。",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

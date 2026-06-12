@@ -1,10 +1,10 @@
-const CACHE_NAME = "fiber-loss-smgi-wavecal-trial-fix6-truncate-v1";
+const CACHE_NAME = "fiber-loss-smgi-wavecal-trial-fix8-auto-update-check-full-draft-v1";
 
 const ASSETS = [
   "./",
   "./index.html",
-  "./style.css?v=smgi-wavecal-trial-fix6-truncate",
-  "./app.js?v=smgi-wavecal-trial-fix6-truncate",
+  "./style.css?v=smgi-wavecal-trial-fix8-auto-update-check-full-draft",
+  "./app.js?v=smgi-wavecal-trial-fix8-auto-update-check-full-draft",
   "./manifest.json",
   "./icon-192.png",
   "./icon-512.png"
@@ -12,7 +12,6 @@ const ASSETS = [
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS)));
-  self.skipWaiting();
 });
 
 self.addEventListener("activate", (event) => {
@@ -22,6 +21,12 @@ self.addEventListener("activate", (event) => {
     )
   );
   self.clients.claim();
+});
+
+
+self.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "SKIP_WAITING") {
+    }
 });
 
 self.addEventListener("fetch", (event) => {

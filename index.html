@@ -3,15 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>SM/GI 光ケーブル規格値計算 fix6-truncate</title>
+  <title>SM/GI 光ケーブル規格値計算 fix8-auto-update-check-full-draft</title>
   <meta name="theme-color" content="#12324a">
   <link rel="manifest" href="./manifest.json">
-  <link rel="stylesheet" href="./style.css?v=smgi-wavecal-trial-fix6-truncate">
+  <link rel="stylesheet" href="./style.css?v=smgi-wavecal-trial-fix8-auto-update-check-full-draft">
 </head>
 <body>
 <header class="app-header">
   <h1>SM/GI 光ケーブル規格値計算</h1>
-  <p>波長別校正値 / 波長別芯線数 / 連番一覧表示 / オフラインPWA</p>
+  <p>波長別校正値 / 入力値全保存 / 3分ごと更新確認 / ケーブル長m優先 / オフラインPWA</p>
+  <p class="version-line">バージョン：<span id="appVersionLabel">fix8-auto-update-check-full-draft</span></p>
 </header>
 
 <div id="inputPreview" class="input-preview hidden" aria-live="polite">
@@ -19,6 +20,17 @@
   <div id="previewLabel" class="preview-label">--</div>
   <div id="previewValue" class="preview-value">未入力</div>
   <div id="previewMeta" class="preview-meta hidden"></div>
+</div>
+
+<div id="updateNotice" class="update-notice hidden" role="status" aria-live="polite">
+  <div class="update-notice-text">
+    <strong id="updateNoticeTitle">新しいバージョンがあります</strong>
+    <span id="updateNoticeText">入力値を全保存してから更新できます。</span>
+  </div>
+  <div class="update-notice-actions">
+    <button type="button" id="applyUpdateBtn" class="primary">更新する</button>
+    <button type="button" id="dismissUpdateBtn" class="secondary">あとで</button>
+  </div>
 </div>
 
 <nav class="bottom-nav" aria-label="画面切替">
@@ -64,15 +76,23 @@
         </label>
 
         <label>
-          始端レングスマーク m
-          <input id="startLm" type="number" inputmode="decimal" step="0.001" placeholder="例：1000">
+          ケーブル長 m（直接入力・最優先）
+          <input id="cableLengthM" type="text" inputmode="decimal" autocomplete="off" placeholder="例：125">
+          <span class="hint">入力した場合は、始端/遠端レングスマークよりこちらを優先します。</span>
         </label>
       </div>
 
       <div class="grid two">
         <label>
+          始端レングスマーク m
+          <input id="startLm" type="text" inputmode="decimal" autocomplete="off" placeholder="例：1000">
+          <span class="hint">ケーブル長mが空欄の場合のみ使用します。</span>
+        </label>
+
+        <label>
           遠端レングスマーク m
-          <input id="endLm" type="number" inputmode="decimal" step="0.001" placeholder="例：1100">
+          <input id="endLm" type="text" inputmode="decimal" autocomplete="off" placeholder="例：1100">
+          <span class="hint">ケーブル長mが空欄の場合のみ使用します。</span>
         </label>
       </div>
 
@@ -169,6 +189,7 @@
   <section id="settingsScreen" class="screen">
     <section class="card">
       <h2>SM/GIマスター</h2>
+      <p class="hint">現在のバージョン：<span id="settingsVersionLabel">fix8-auto-update-check-full-draft</span></p>
       <p class="hint">規格値・測定値・校正値は小数第2位表示。</p>
       <pre id="masterPreview" class="code-preview"></pre>
     </section>
@@ -186,6 +207,6 @@
   <div id="reportContent" class="report-content"></div>
 </div>
 
-<script src="./app.js?v=smgi-wavecal-trial-fix6-truncate"></script>
+<script src="./app.js?v=smgi-wavecal-trial-fix8-auto-update-check-full-draft"></script>
 </body>
 </html>
