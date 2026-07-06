@@ -226,8 +226,58 @@ button.danger{background:#fff0f1;color:var(--ng)}
 .badge.pending{background:#f1f4f6;color:var(--muted);border:1px solid #d7e0e7}
 
 .history-list{display:grid;gap:14px;margin-top:12px}
-.history-group{border:1px solid var(--line);border-radius:18px;background:#f8fbfd;padding:12px}
-.history-group-title{color:var(--primary);font-size:16px;font-weight:1000;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+.auto-notice{
+  margin:10px 0 14px;
+  border:1px solid #b8e4ca;
+  background:#e7f7ee;
+  color:var(--ok);
+  border-radius:14px;
+  padding:10px 12px;
+  font-size:13px;
+  font-weight:900;
+}
+.history-group{
+  border:1px solid var(--line);
+  border-radius:18px;
+  background:#f8fbfd;
+  overflow:hidden;
+}
+.history-group + .history-group{margin-top:12px}
+.history-group-summary{
+  display:flex;
+  justify-content:space-between;
+  gap:10px;
+  align-items:center;
+  padding:12px;
+  cursor:pointer;
+  list-style:none;
+  border-bottom:1px solid var(--line);
+}
+.history-group-summary::-webkit-details-marker{display:none}
+.history-group-summary::before{
+  content:"▶";
+  color:var(--primary);
+  font-weight:1000;
+  margin-right:2px;
+}
+.history-group[open] .history-group-summary::before{content:"▼"}
+.history-group-main{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}
+.history-group-title{color:var(--primary);font-size:17px;font-weight:1000}
+.history-group-sub{color:var(--muted);font-size:12px;font-weight:800}
+.history-group-badges{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.history-chip{
+  display:inline-flex;
+  align-items:center;
+  min-height:26px;
+  padding:4px 8px;
+  border-radius:999px;
+  background:#e7eef3;
+  color:var(--primary);
+  font-size:12px;
+  font-weight:1000;
+}
+.history-group-body{padding:0 12px 12px}
+.history-group-body .history-item:first-child{margin-top:12px}
 .history-item{border:1px solid var(--line);border-radius:16px;padding:12px;background:#fff;margin-top:10px}
 .history-title{color:var(--primary);font-weight:1000;margin-bottom:4px}
 .history-meta{color:var(--muted);font-size:12px;line-height:1.6}
@@ -403,4 +453,9 @@ button.danger{background:#fff0f1;color:var(--ng)}
   .draft-actions button{flex:1}
   .backup-item{display:grid}
   .backup-item button{width:100%}
+}
+
+@media(max-width:720px){
+  .history-group-summary{align-items:flex-start;flex-direction:column}
+  .history-group-badges{justify-content:flex-start}
 }

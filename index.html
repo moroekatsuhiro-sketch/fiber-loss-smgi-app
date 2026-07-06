@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>SM/GI 光ケーブル規格値計算 fix11-reset-state-verified</title>
+  <title>SM/GI 光ケーブル規格値計算 fix12-workno-calibration-auto</title>
   <meta name="theme-color" content="#12324a">
   <link rel="manifest" href="./manifest.json">
-  <link rel="stylesheet" href="./style.css?v=smgi-wavecal-trial-fix11-reset-state-verified">
+  <link rel="stylesheet" href="./style.css?v=smgi-wavecal-trial-fix12-workno-calibration-auto">
 </head>
 <body>
 <header class="app-header">
   <h1>SM/GI 光ケーブル規格値計算</h1>
   <p>波長別校正値 / 入力値全保存 / 自動復元 / 軽量バックアップ / 3分ごと更新確認</p>
-  <p class="version-line">バージョン：<span id="appVersionLabel">fix11-reset-state-verified</span></p>
+  <p class="version-line">バージョン：<span id="appVersionLabel">fix12-workno-calibration-auto</span></p>
 </header>
 
 <div id="inputPreview" class="input-preview hidden" aria-live="polite">
@@ -154,6 +154,7 @@
 
       <h2>波長別 設定</h2>
       <p class="hint">波長選択に合わせて、校正値・芯線数・開始線番の入力欄を切り替えます。校正値は記録用のみで、計算・判定には使いません。</p>
+      <div id="calibrationAutoNotice" class="auto-notice hidden"></div>
       <div id="wavelengthConfigList"></div>
 
       <label>
@@ -210,7 +211,7 @@
   <section id="settingsScreen" class="screen">
     <section class="card">
       <h2>SM/GIマスター</h2>
-      <p class="hint">現在のバージョン：<span id="settingsVersionLabel">fix11-reset-state-verified</span></p>
+      <p class="hint">現在のバージョン：<span id="settingsVersionLabel">fix12-workno-calibration-auto</span></p>
       <p class="hint">規格値・測定値・校正値は小数第2位表示。</p>
       <pre id="masterPreview" class="code-preview"></pre>
     </section>
@@ -228,6 +229,6 @@
   <div id="reportContent" class="report-content"></div>
 </div>
 
-<script src="./app.js?v=smgi-wavecal-trial-fix11-reset-state-verified"></script>
+<script src="./app.js?v=smgi-wavecal-trial-fix12-workno-calibration-auto"></script>
 </body>
 </html>
