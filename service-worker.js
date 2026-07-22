@@ -1,10 +1,10 @@
-const CACHE_NAME = "fiber-loss-smgi-wavecal-trial-fix12-workno-calibration-auto-v1";
+const CACHE_NAME = "fiber-loss-smgi-wavecal-trial-fix13-history-overwrite-default-v1";
 
 const ASSETS = [
   "./",
   "./index.html",
-  "./style.css?v=smgi-wavecal-trial-fix12-workno-calibration-auto",
-  "./app.js?v=smgi-wavecal-trial-fix12-workno-calibration-auto",
+  "./style.css?v=smgi-wavecal-trial-fix13-history-overwrite-default",
+  "./app.js?v=smgi-wavecal-trial-fix13-history-overwrite-default",
   "./manifest.json",
   "./icon-192.png",
   "./icon-512.png"

@@ -1,4 +1,4 @@
-const APP_VERSION = "fix11-reset-state-verified";
+const APP_VERSION = "fix13-history-overwrite-default";
 const UPDATE_CHECK_INTERVAL_MS = 3 * 60 * 1000;
 const BACKUP_INTERVAL_MS = 15 * 1000;
 const MAX_DRAFT_BACKUPS = 2;
@@ -739,8 +739,9 @@ function handleSave() {
     if (index >= 0) records[index] = record;
     else records.unshift(record);
     saveRecords(records);
-    cancelEditMode(false);
+    keepRecordInOverwriteMode(record.id);
     clearDraftAndBackups("saved");
+    saveDraft();
     renderHistory();
     alert("履歴を更新しました。");
     return;
@@ -748,9 +749,17 @@ function handleSave() {
 
   records.unshift(record);
   saveRecords(records);
+  keepRecordInOverwriteMode(record.id);
   clearDraftAndBackups("saved");
+  saveDraft();
   renderHistory();
-  alert("履歴に保存しました。");
+  alert("履歴に保存しました。以後はこの履歴を上書きします。");
+}
+
+function keepRecordInOverwriteMode(recordId) {
+  editingRecordId = recordId;
+  $("saveBtn").textContent = "履歴を上書き";
+  $("cancelEditBtn").classList.remove("hidden");
 }
 
 function loadRecords() {
@@ -912,7 +921,7 @@ function startEditRecord(id) {
   updateJudgements();
   renderLiveSummary();
 
-  $("saveBtn").textContent = "履歴を更新";
+  $("saveBtn").textContent = "履歴を上書き";
   $("cancelEditBtn").classList.remove("hidden");
   switchScreen("calcScreen");
 
@@ -1070,7 +1079,7 @@ function downloadCsv(rows, filename) {
 }
 
 function downloadJsonBackup() {
-  const data = { app: "fiber-loss-smgi-wavecal-trial-fix11-reset-state-verified", exportedAt: new Date().toISOString(), records: loadRecords() };
+  const data = { app: "fiber-loss-smgi-wavecal-trial-fix13-history-overwrite-default", exportedAt: new Date().toISOString(), records: loadRecords() };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
