@@ -30,6 +30,17 @@
     return Object.values(DEVICE_RULES).filter((rule) => rule.cableType === type);
   }
 
+  function inferLegacyDevice(type, preferred, wavelengths, wavelengthSelection) {
+    const preferredRule = ruleFromValue(preferred);
+    if (preferredRule?.cableType === type) return preferredRule.model;
+    if (type === "SM") return "AQ4280A";
+    const waves = (wavelengths || []).map(Number);
+    if (waves.includes(1300)) return "KI2800";
+    if (waves.includes(1310)) return "MiNi368";
+    if (wavelengthSelection === "both" || String(wavelengthSelection) === "1300") return "KI2800";
+    return defaultDeviceForType(type);
+  }
+
   function installDeviceFields() {
     if (byId("sourceDevice")) return;
     const cableType = byId("cableType");
@@ -140,13 +151,18 @@
 
   window.restoreDraft = function restoreDraftWithDevice(draftData) {
     const form = draftData?.form || {};
-    syncDeviceOptions(form.cableType || "SM", form.sourceDevice || "");
+    const type = form.cableType || "SM";
+    const preferred = inferLegacyDevice(type, form.sourceDevice || "", draftData?.latestCalculation?.wavelengths, form.wavelength);
+    syncDeviceOptions(type, preferred);
     originalRestoreDraft(draftData);
   };
 
   window.startEditRecord = function startEditRecordWithDevice(id) {
     const record = typeof loadRecords === "function" ? loadRecords().find((item) => item.id === id) : null;
-    if (record) syncDeviceOptions(record.cableType || "SM", record.sourceDeviceModel || record.sourceDevice || "");
+    if (record) {
+      const preferred = inferLegacyDevice(record.cableType || "SM", record.sourceDeviceModel || record.sourceDevice || "", record.wavelengths, record.wavelengths?.length > 1 ? "both" : record.wavelengths?.[0]);
+      syncDeviceOptions(record.cableType || "SM", preferred);
+    }
     originalStartEditRecord(id);
   };
 
