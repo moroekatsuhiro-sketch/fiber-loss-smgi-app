@@ -1,10 +1,11 @@
-const CACHE_NAME = "fiber-loss-smgi-wavecal-trial-fix13-history-overwrite-default-v1";
+const CACHE_NAME = "fiber-loss-smgi-wavecal-trial-fix13-history-overwrite-default-v2";
 
 const ASSETS = [
   "./",
   "./index.html",
   "./style.css?v=smgi-wavecal-trial-fix13-history-overwrite-default",
   "./app.js?v=smgi-wavecal-trial-fix13-history-overwrite-default",
+  "./measurement-device.js?v=1",
   "./manifest.json",
   "./icon-192.png",
   "./icon-512.png"
