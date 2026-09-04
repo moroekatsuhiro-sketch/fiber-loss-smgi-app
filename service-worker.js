@@ -1,10 +1,11 @@
-const CACHE_NAME = "fiber-loss-smgi-wavecal-trial-fix13-history-overwrite-default-v1";
+const CACHE_NAME = "fiber-loss-smgi-wavecal-trial-fix13-history-overwrite-default-v2";
 
 const ASSETS = [
   "./",
   "./index.html",
   "./style.css?v=smgi-wavecal-trial-fix13-history-overwrite-default",
   "./app.js?v=smgi-wavecal-trial-fix13-history-overwrite-default",
+  "./measurement-device.js?v=measurement-device-v1",
   "./manifest.json",
   "./icon-192.png",
   "./icon-512.png"
@@ -22,7 +23,6 @@ self.addEventListener("activate", (event) => {
   );
   self.clients.claim();
 });
-
 
 self.addEventListener("message", (event) => {
   if (event.data && event.data.type === "SKIP_WAITING") {
