@@ -1,4 +1,4 @@
-const APP_VERSION = "fix14-work-date-history";
+const APP_VERSION = "fix15-auto-section-name";
 const UPDATE_CHECK_INTERVAL_MS = 3 * 60 * 1000;
 const BACKUP_INTERVAL_MS = 15 * 1000;
 const MAX_DRAFT_BACKUPS = 2;
@@ -111,7 +111,6 @@ function initEvents() {
   });
 
   $("sectionName").addEventListener("input", () => {
-    $("sectionName").dataset.manual = "true";
     saveDraftSoon();
   });
 
@@ -160,7 +159,6 @@ function initEvents() {
 }
 
 function updateAutoSectionName() {
-  if ($("sectionName").dataset.manual === "true") return;
   const start = $("startPanel").value.trim();
   const end = $("endPanel").value.trim();
   $("sectionName").value = start && end ? `${start} ～ ${end}` : "";
@@ -924,7 +922,6 @@ function loadRecordIntoForm(record, id = null) {
   $("workNo").value = record.workNo || "";
   $("siteName").value = record.siteName || "";
   $("sectionName").value = record.sectionName || "";
-  $("sectionName").dataset.manual = "true";
   $("startPanel").value = record.startPanel || "";
   $("endPanel").value = record.endPanel || "";
   $("startLm").value = record.startLm ?? "";
@@ -1110,7 +1107,7 @@ function downloadCsv(rows, filename) {
 }
 
 function downloadJsonBackup() {
-  const data = { app: "fiber-loss-smgi-wavecal-trial-fix14-work-date-history", exportedAt: new Date().toISOString(), records: loadRecords() };
+  const data = { app: "fiber-loss-smgi-wavecal-trial-fix15-auto-section-name", exportedAt: new Date().toISOString(), records: loadRecords() };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -1249,7 +1246,6 @@ function hardClearWorkingInputState(options = {}) {
     $("calibrationAutoNotice").classList.add("hidden");
     setValueIfExists("siteName", "");
     setValueIfExists("sectionName", "");
-    if ($("sectionName")) $("sectionName").dataset.manual = "false";
     setValueIfExists("startPanel", "");
     setValueIfExists("endPanel", "");
     setValueIfExists("cableLengthM", "");
@@ -1429,7 +1425,6 @@ function buildDraftData() {
       workNo: $("workNo")?.value ?? "",
       siteName: $("siteName")?.value ?? "",
       sectionName: $("sectionName")?.value ?? "",
-      sectionManual: $("sectionName")?.dataset.manual || "false",
       startPanel: $("startPanel")?.value ?? "",
       endPanel: $("endPanel")?.value ?? "",
       cableLengthM: $("cableLengthM")?.value ?? "",
@@ -1496,7 +1491,6 @@ function restoreDraft(draftData) {
   $("workNo").value = form.workNo || "";
   $("siteName").value = form.siteName || "";
   $("sectionName").value = form.sectionName || "";
-  $("sectionName").dataset.manual = form.sectionManual || "false";
   $("startPanel").value = form.startPanel || "";
   $("endPanel").value = form.endPanel || "";
   $("cableLengthM").value = form.cableLengthM || "";

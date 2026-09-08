@@ -1,11 +1,11 @@
-const CACHE_NAME = "fiber-loss-smgi-wavecal-trial-fix14-work-date-history-v1";
+const CACHE_NAME = "fiber-loss-smgi-wavecal-trial-fix15-auto-section-name-v1";
 
 const ASSETS = [
   "./",
   "./index.html",
-  "./style.css?v=smgi-wavecal-trial-fix14-work-date-history",
-  "./app.js?v=smgi-wavecal-trial-fix14-work-date-history",
-  "./history.js?v=smgi-wavecal-trial-fix14-work-date-history",
+  "./style.css?v=smgi-wavecal-trial-fix15-auto-section-name",
+  "./app.js?v=smgi-wavecal-trial-fix15-auto-section-name",
+  "./history.js?v=smgi-wavecal-trial-fix15-auto-section-name",
   "./manifest.json",
   "./icon-192.png",
   "./icon-512.png"
