@@ -277,6 +277,10 @@ button.danger{background:#fff0f1;color:var(--ng)}
   font-weight:1000;
 }
 .history-group-body{padding:0 12px 12px}
+.history-group > .history-item{margin:12px}
+.history-transfer{margin:16px 0;padding:12px;border:1px solid var(--line);border-radius:12px}
+.history-transfer summary{cursor:pointer;font-weight:800}
+#historyClipboard{font-family:monospace;max-height:220px}
 .history-group-body .history-item:first-child{margin-top:12px}
 .history-item{border:1px solid var(--line);border-radius:16px;padding:12px;background:#fff;margin-top:10px}
 .history-title{color:var(--primary);font-weight:1000;margin-bottom:4px}

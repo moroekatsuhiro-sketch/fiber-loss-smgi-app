@@ -1,4 +1,4 @@
-const APP_VERSION = "fix13-history-overwrite-default";
+const APP_VERSION = "fix14-work-date-history";
 const UPDATE_CHECK_INTERVAL_MS = 3 * 60 * 1000;
 const BACKUP_INTERVAL_MS = 15 * 1000;
 const MAX_DRAFT_BACKUPS = 2;
@@ -57,6 +57,7 @@ const previewLabels = {
 };
 
 document.addEventListener("DOMContentLoaded", () => {
+  $("inputDate").value = localInputDate();
   initNavigation();
   initEvents();
   initAppVersionDisplay();
@@ -83,6 +84,7 @@ function initNavigation() {
 }
 
 function switchScreen(screenId) {
+  hideInputPreview();
   document.querySelectorAll(".screen").forEach((screen) => screen.classList.remove("active"));
   document.querySelectorAll(".nav-btn").forEach((btn) => btn.classList.toggle("active", btn.dataset.screen === screenId));
   $(screenId).classList.add("active");
@@ -90,6 +92,10 @@ function switchScreen(screenId) {
 }
 
 function initEvents() {
+  $("inputDate").addEventListener("change", refreshCalibrationFromHistory);
+  $("historyWorkFilter").addEventListener("input", renderHistory);
+  $("pasteHistoryBtn").addEventListener("click", pasteHistory);
+  $("applyCalibrationBtn").addEventListener("click", refreshCalibrationFromHistory);
   ["startPanel", "endPanel"].forEach((id) => {
     $(id).addEventListener("input", () => {
       updateAutoSectionName();
@@ -101,6 +107,7 @@ function initEvents() {
     $("workNo").value = $("workNo").value.replace(/\D/g, "").slice(0, 5);
     saveDraftSoon();
     updatePreviewForActiveElement();
+    refreshCalibrationFromHistory();
   });
 
   $("sectionName").addEventListener("input", () => {
@@ -248,6 +255,7 @@ function renderWaveConfigs(keepValues) {
   if (keepValues && !isRestoringDraft) collectWaveInputs();
 
   const waves = getSelectedWavelengths();
+  if (!isRestoringDraft) applyMatchingCalibration();
   $("wavelengthConfigList").innerHTML = waves.map((wave) => {
     const d = ensureWave(wave);
     return `
@@ -298,6 +306,10 @@ function renderWaveConfigs(keepValues) {
     input.addEventListener("focus", () => showPreviewForElement(input));
     input.addEventListener("input", () => {
       collectWaveInputs();
+      if (input.classList.contains("calibration-input")) {
+        delete ensureWave(input.dataset.wave).autoCalibration?.[input.dataset.kind];
+        renderMeasurementInputs();
+      }
       if (input.dataset.kind?.includes("CoreCount") || input.dataset.kind?.includes("FirstLineNo")) {
         clearCalculationOnly();
         renderMeasurements(true);
@@ -492,6 +504,7 @@ function handleCalculate() {
 
 function getBaseInput() {
   const workNo = validateWorkNo();
+  if (!isValidInputDate($("inputDate").value)) throw new Error("入力日を指定してください。");
   const cableLengthMDirect = getOptionalNumber("cableLengthM", "ケーブル長m", 0);
   const startLm = toNullableNumber($("startLm").value);
   const endLm = toNullableNumber($("endLm").value);
@@ -519,6 +532,7 @@ function getBaseInput() {
 
   return {
     workNo,
+    inputDate: $("inputDate").value,
     workNoDisplay: formatWorkNo(workNo),
     siteName: $("siteName").value.trim(),
     sectionName: $("sectionName").value.trim(),
@@ -601,6 +615,7 @@ function renderCalculation(calc) {
 
   const rows = [
     ["工事番号", calc.workNoDisplay],
+    ["入力日", calc.inputDate || ""],
     ["ケーブル長", `${formatNumber(calc.lengthM, 3)} m / ${formatNumber(calc.lengthKm, 6)} km`],
     ["ケーブル長入力方式", calc.lengthSourceLabel || "レングスマーク差"],
     ["直接入力ケーブル長", calc.cableLengthMInput ? `${formatFixedTruncated(calc.cableLengthMInput, 3)} m（最優先）` : "未入力"],
@@ -772,11 +787,13 @@ function saveRecords(records) {
 }
 
 function renderHistory() {
-  const records = loadRecords();
+  const filter = $("historyWorkFilter").value.replace(/^K-/i, "").trim();
+  const records = loadRecords().filter(record => String(record.workNo || "").includes(filter))
+    .sort((a, b) => recordTime(b) - recordTime(a));
   const list = $("historyList");
 
   if (records.length === 0) {
-    list.innerHTML = `<p class="hint">履歴はまだありません。</p>`;
+    list.innerHTML = `<p class="hint">該当する履歴はありません。</p>`;
     return;
   }
 
@@ -789,9 +806,10 @@ function renderHistory() {
 
   list.innerHTML = "";
   groups.forEach((items, groupName) => {
-    const group = document.createElement("section");
+    const group = document.createElement("details");
+    group.open = true;
     group.className = "history-group";
-    group.innerHTML = `<div class="history-group-title">工事番号：${escapeHtml(groupName)}（${items.length}件）</div>`;
+    group.innerHTML = `<summary class="history-group-summary"><span class="history-group-main"><span class="history-group-title">工事番号：${escapeHtml(groupName)}（${items.length}件）</span><span class="history-group-sub">最新入力日：${escapeHtml(recordInputDate(items[0]))}</span></span></summary>`;
     items.forEach((record) => {
       const counts = countRecordJudgements(record);
       const item = document.createElement("article");
@@ -808,6 +826,8 @@ function renderHistory() {
       item.querySelector(".show-report-btn").addEventListener("click", () => showRecordReport(record.id));
       item.querySelector(".export-record-csv-btn").addEventListener("click", () => exportRecordCsv(record.id));
       item.querySelector(".edit-record-btn").addEventListener("click", () => startEditRecord(record.id));
+      item.querySelector(".copy-record-btn").addEventListener("click", () => copyHistory(record));
+      item.querySelector(".duplicate-record-btn").addEventListener("click", () => useHistoryAsNew(record));
       item.querySelector(".delete-record-btn").addEventListener("click", () => deleteRecord(record.id));
       group.appendChild(item);
     });
@@ -831,6 +851,7 @@ function renderRecordDetail(record) {
   return `
     <div class="detail-grid">
       <div><strong>工事番号</strong><span>${escapeHtml(record.workNoDisplay || formatWorkNo(record.workNo) || "")}</span></div>
+      <div><strong>入力日</strong><span>${escapeHtml(recordInputDate(record) || "不明")}${record.inputDate ? "" : "（保存日から推定）"}</span></div>
       <div><strong>現場名</strong><span>${escapeHtml(record.siteName || "")}</span></div>
       <div><strong>始端盤名</strong><span>${escapeHtml(record.startPanel || "")}</span></div>
       <div><strong>遠端盤名</strong><span>${escapeHtml(record.endPanel || "")}</span></div>
@@ -842,6 +863,8 @@ function renderRecordDetail(record) {
     <div class="actions">
       <button type="button" class="secondary show-report-btn">控え表示</button>
       <button type="button" class="secondary export-record-csv-btn">この履歴をCSV出力</button>
+      <button type="button" class="secondary copy-record-btn">履歴をコピー</button>
+      <button type="button" class="secondary duplicate-record-btn">新規測定に複製</button>
       <button type="button" class="primary edit-record-btn">この履歴を編集</button>
       <button type="button" class="danger delete-record-btn">この履歴を削除</button>
     </div>
@@ -889,10 +912,15 @@ function startEditRecord(id) {
   const record = loadRecords().find((item) => item.id === id);
   if (!record) return;
 
+  loadRecordIntoForm(record, id);
+}
+
+function loadRecordIntoForm(record, id = null) {
   editingRecordId = id;
   suppressDraftSave = true;
   isRestoringDraft = true;
 
+  $("inputDate").value = recordInputDate(record) || localInputDate();
   $("workNo").value = record.workNo || "";
   $("siteName").value = record.siteName || "";
   $("sectionName").value = record.sectionName || "";
@@ -926,6 +954,8 @@ function startEditRecord(id) {
   switchScreen("calcScreen");
 
   suppressDraftSave = false;
+  if (!id) cancelEditMode(false);
+  saveDraftNow();
 }
 
 function normalizeRecordToWaveDraft(record) {
@@ -993,7 +1023,7 @@ function clearAllRecords() {
 
 function buildCsvRows(records) {
   const headers = [
-    "保存日時","工事番号","現場名","区間名","始端盤名","遠端盤名","始端LM","遠端LM","ケーブル長入力方式","直接入力ケーブル長m","LM差m","使用ケーブル長m","使用ケーブル長km",
+    "保存日時","入力日","工事番号","現場名","区間名","始端盤名","遠端盤名","始端LM","遠端LM","ケーブル長入力方式","直接入力ケーブル長m","LM差m","使用ケーブル長m","使用ケーブル長km",
     "ケーブル種類","波長","融着点数","コネクタ数","規格値","測定方向","芯線数","線番","測定値","判定",
     "始点校正値","終点校正値","使用校正値種別","使用校正値","メモ","区間メモ"
   ];
@@ -1013,6 +1043,7 @@ function buildCsvRows(records) {
         list.forEach((row) => {
           rows.push([
             formatDateTime(record.savedAt),
+            recordInputDate(record),
             record.workNoDisplay || formatWorkNo(record.workNo),
             record.siteName,
             record.sectionName,
@@ -1079,7 +1110,7 @@ function downloadCsv(rows, filename) {
 }
 
 function downloadJsonBackup() {
-  const data = { app: "fiber-loss-smgi-wavecal-trial-fix13-history-overwrite-default", exportedAt: new Date().toISOString(), records: loadRecords() };
+  const data = { app: "fiber-loss-smgi-wavecal-trial-fix14-work-date-history", exportedAt: new Date().toISOString(), records: loadRecords() };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -1145,6 +1176,7 @@ function renderReportSheet(record) {
       <div class="report-info-grid">
         <div class="report-info-item"><strong>保存日時</strong><span>${escapeHtml(formatDateTime(record.savedAt))}</span></div>
         <div class="report-info-item"><strong>更新日時</strong><span>${escapeHtml(record.updatedAt ? formatDateTime(record.updatedAt) : "-")}</span></div>
+        <div class="report-info-item"><strong>入力日</strong><span>${escapeHtml(recordInputDate(record))}</span></div>
         <div class="report-info-item"><strong>工事番号</strong><span>${escapeHtml(workNo)}</span></div>
         <div class="report-info-item"><strong>現場名</strong><span>${escapeHtml(record.siteName || "")}</span></div>
         <div class="report-info-item"><strong>区間名</strong><span>${escapeHtml(record.sectionName || "")}</span></div>
@@ -1213,6 +1245,8 @@ function hardClearWorkingInputState(options = {}) {
 
     // 4) 固定フォームをブラウザ標準resetに頼らず明示的に初期化。
     setValueIfExists("workNo", "");
+    setValueIfExists("inputDate", localInputDate());
+    $("calibrationAutoNotice").classList.add("hidden");
     setValueIfExists("siteName", "");
     setValueIfExists("sectionName", "");
     if ($("sectionName")) $("sectionName").dataset.manual = "false";
@@ -1391,6 +1425,7 @@ function buildDraftData() {
     savedAt: new Date().toISOString(),
     editingRecordId,
     form: {
+      inputDate: $("inputDate")?.value ?? "",
       workNo: $("workNo")?.value ?? "",
       siteName: $("siteName")?.value ?? "",
       sectionName: $("sectionName")?.value ?? "",
@@ -1455,8 +1490,9 @@ function restoreDraft(draftData) {
   isRestoringDraft = true;
 
   const form = draftData.form || {};
-  editingRecordId = draftData.editingRecordId || editingRecordId || null;
+  editingRecordId = draftData.editingRecordId || null;
 
+  $("inputDate").value = form.inputDate || recordInputDate(draftData.latestCalculation || draftData) || localInputDate();
   $("workNo").value = form.workNo || "";
   $("siteName").value = form.siteName || "";
   $("sectionName").value = form.sectionName || "";
@@ -1475,6 +1511,8 @@ function restoreDraft(draftData) {
 
   waveDraft = normalizeRestoredWaveDraft(draftData.waveDraft || {}, draftData.latestCalculation || null);
   latestCalculation = draftData.latestCalculation || null;
+  if (editingRecordId) keepRecordInOverwriteMode(editingRecordId);
+  else cancelEditMode(false);
 
   renderWaveConfigs(false);
   renderMeasurementInputs();
@@ -1513,6 +1551,7 @@ function normalizeRestoredWaveDraft(restored, restoredCalculation) {
     const endFirstLineNo = src.endFirstLineNo ?? calcSettings.endFirstLineNo ?? calcMeasurements.endFirstLineNo ?? "1";
 
     out[String(wave)] = {
+      autoCalibration: structuredCloneSafe(src.autoCalibration || {}),
       startCalibration: src.startCalibration ?? formatCalibrationInputValue(calcSettings.startCalibration ?? calcMeasurements.startCalibration),
       endCalibration: src.endCalibration ?? formatCalibrationInputValue(calcSettings.endCalibration ?? calcMeasurements.endCalibration),
       startCoreCount,
@@ -1695,7 +1734,7 @@ function restoreBackupByIndex(index) {
 function setupInputPreviewForAllFields() {
   document.querySelectorAll("input, select, textarea").forEach((el) => {
     if (el.dataset.previewReady === "true") return;
-    if (el.type === "file") return;
+    if (el.type === "file" || ["historyClipboard", "historyWorkFilter"].includes(el.id)) return;
     el.dataset.previewReady = "true";
     el.addEventListener("focus", () => showPreviewForElement(el));
     el.addEventListener("input", () => updatePreviewForActiveElement());
@@ -1751,6 +1790,7 @@ function updatePreviewForActiveElement() {
 }
 
 function hideInputPreview() {
+  $("inputPreview").style.removeProperty("display");
   $("inputPreview").classList.add("hidden");
 }
 
