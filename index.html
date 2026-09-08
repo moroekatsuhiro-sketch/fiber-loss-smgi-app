@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>SM/GI 光ケーブル規格値計算 fix14-work-date-history</title>
+  <title>SM/GI 光ケーブル規格値計算 fix15-auto-section-name</title>
   <meta name="theme-color" content="#12324a">
   <link rel="manifest" href="./manifest.json">
-  <link rel="stylesheet" href="./style.css?v=smgi-wavecal-trial-fix14-work-date-history">
+  <link rel="stylesheet" href="./style.css?v=smgi-wavecal-trial-fix15-auto-section-name">
 </head>
 <body>
 <header class="app-header">
   <h1>SM/GI 光ケーブル規格値計算</h1>
   <p>波長別校正値 / 入力値全保存 / 自動復元 / 軽量バックアップ / 3分ごと更新確認</p>
-  <p class="version-line">バージョン：<span id="appVersionLabel">fix14-work-date-history</span></p>
+  <p class="version-line">バージョン：<span id="appVersionLabel">fix15-auto-section-name</span></p>
 </header>
 
 <div id="inputPreview" class="input-preview hidden" aria-live="polite">
@@ -83,6 +83,7 @@
         <label>
           区間名
           <input id="sectionName" type="text" placeholder="始端・遠端から自動生成">
+          <span class="hint">始端・遠端の盤名を変更すると自動更新します。区間名を手修正した後も、盤名の変更時は自動生成します。</span>
         </label>
 
         <label>
@@ -221,7 +222,7 @@
   <section id="settingsScreen" class="screen">
     <section class="card">
       <h2>SM/GIマスター</h2>
-      <p class="hint">現在のバージョン：<span id="settingsVersionLabel">fix14-work-date-history</span></p>
+      <p class="hint">現在のバージョン：<span id="settingsVersionLabel">fix15-auto-section-name</span></p>
       <p class="hint">規格値・測定値・校正値は小数第2位表示。</p>
       <pre id="masterPreview" class="code-preview"></pre>
     </section>
@@ -239,7 +240,7 @@
   <div id="reportContent" class="report-content"></div>
 </div>
 
-<script src="./history.js?v=smgi-wavecal-trial-fix14-work-date-history"></script>
-<script src="./app.js?v=smgi-wavecal-trial-fix14-work-date-history"></script>
+<script src="./history.js?v=smgi-wavecal-trial-fix15-auto-section-name"></script>
+<script src="./app.js?v=smgi-wavecal-trial-fix15-auto-section-name"></script>
 </body>
 </html>
