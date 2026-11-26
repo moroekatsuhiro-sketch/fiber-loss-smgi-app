@@ -106,7 +106,7 @@ const assert = require("node:assert/strict");
       assert.equal(await page.locator(".export-work-csv-btn").count(), 2);
       const expected = await page.evaluate(() => {
         const records = loadRecords().filter(r => r.workNo === "26001").sort((a, b) => recordTime(b) - recordTime(a));
-        return "\\ufeff" + buildCsvRows(records).map(row => row.map(csvEscape).join(",")).join("\\r\\n");
+        return "\ufeff" + buildCsvRows(records).map(row => row.map(csvEscape).join(",")).join("\r\n");
       });
       const group = page.locator(".history-group").filter({ has: page.locator(".history-group-title").filter({ hasText: "K-26001" }) });
       const [download] = await Promise.all([page.waitForEvent("download"), group.locator(".export-work-csv-btn").click()]);
