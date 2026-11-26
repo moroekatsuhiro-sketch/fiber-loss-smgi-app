@@ -92,6 +92,34 @@ const assert = require("node:assert/strict");
         noMatch: Object.keys(matchingCalibrations([r], "26099", "2026-09-08", "SM", 1310)).length };
     });
     assert.deepEqual(checks, { source: "legacy", csvDate: "2026-09-08", csvAligned: true, invalidDate: false, noMatch: 0 });
+    // Work-group CSV must include all saved sections of exactly one work number.
+    const savedBeforeCsv = await page.evaluate(() => loadRecords());
+    try {
+      await page.evaluate(() => {
+        const records = loadRecords();
+        const sameWork = { ...records[0], id: "csv-other-date", inputDate: "2026-09-10", sectionName: "CSV別日区間" };
+        const otherWork = { ...records[0], id: "csv-other-work", workNo: "26002", workNoDisplay: "K-26002", sectionName: "CSV別工事" };
+        saveRecords([...records, sameWork, otherWork]);
+        renderHistory();
+      });
+      await page.fill("#historyWorkFilter", "2600");
+      assert.equal(await page.locator(".export-work-csv-btn").count(), 2);
+      const expected = await page.evaluate(() => {
+        const records = loadRecords().filter(r => r.workNo === "26001").sort((a, b) => recordTime(b) - recordTime(a));
+        return "\ufeff" + buildCsvRows(records).map(row => row.map(csvEscape).join(",")).join("\r\n");
+      });
+      const group = page.locator(".history-group").filter({ has: page.locator(".history-group-title").filter({ hasText: "K-26001" }) });
+      const [download] = await Promise.all([page.waitForEvent("download"), group.locator(".export-work-csv-btn").click()]);
+      assert.match(download.suggestedFilename(), /K-26001/);
+      const actual = fs.readFileSync(await download.path(), "utf8");
+      assert.equal(actual, expected);
+      assert.ok(actual.includes("CSV別日区間"));
+      assert.ok(!actual.includes("CSV別工事"));
+      assert.equal(await page.evaluate(() => loadRecords().length), savedBeforeCsv.length + 2);
+    } finally {
+      await page.evaluate(records => { saveRecords(records); renderHistory(); }, savedBeforeCsv);
+      await page.fill("#historyWorkFilter", "K-26001");
+    }
     // Panel changes must keep naming automatic after editing, copying and restoring.
     await page.locator(".edit-record-btn").first().click();
     await page.fill("#startPanel", "始端A");

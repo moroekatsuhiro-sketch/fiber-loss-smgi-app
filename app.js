@@ -1,4 +1,4 @@
-const APP_VERSION = "fix15-auto-section-name";
+const APP_VERSION = "fix16-work-group-csv";
 const UPDATE_CHECK_INTERVAL_MS = 3 * 60 * 1000;
 const BACKUP_INTERVAL_MS = 15 * 1000;
 const MAX_DRAFT_BACKUPS = 2;
@@ -784,6 +784,10 @@ function saveRecords(records) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
 }
 
+function historyWorkGroupKey(record) {
+  return record.workNoDisplay || formatWorkNo(record.workNo) || "工事番号未設定";
+}
+
 function renderHistory() {
   const filter = $("historyWorkFilter").value.replace(/^K-/i, "").trim();
   const records = loadRecords().filter(record => String(record.workNo || "").includes(filter))
@@ -797,7 +801,7 @@ function renderHistory() {
 
   const groups = new Map();
   records.forEach((record) => {
-    const key = record.workNoDisplay || formatWorkNo(record.workNo) || "工事番号未設定";
+    const key = historyWorkGroupKey(record);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(record);
   });
@@ -808,6 +812,15 @@ function renderHistory() {
     group.open = true;
     group.className = "history-group";
     group.innerHTML = `<summary class="history-group-summary"><span class="history-group-main"><span class="history-group-title">工事番号：${escapeHtml(groupName)}（${items.length}件）</span><span class="history-group-sub">最新入力日：${escapeHtml(recordInputDate(items[0]))}</span></span></summary>`;
+    const groupActions = document.createElement("div");
+    groupActions.className = "actions";
+    const groupCsvBtn = document.createElement("button");
+    groupCsvBtn.type = "button";
+    groupCsvBtn.className = "secondary export-work-csv-btn";
+    groupCsvBtn.textContent = "この工事のCSV出力";
+    groupCsvBtn.addEventListener("click", () => exportWorkCsv(groupName));
+    groupActions.appendChild(groupCsvBtn);
+    group.appendChild(groupActions);
     items.forEach((record) => {
       const counts = countRecordJudgements(record);
       const item = document.createElement("article");
@@ -1086,6 +1099,18 @@ function exportAllCsv() {
   downloadCsv(buildCsvRows(records), `fiber-loss-smgi-all-${dateStamp()}.csv`);
 }
 
+function exportWorkCsv(groupName) {
+  const records = loadRecords().filter(record => historyWorkGroupKey(record) === groupName)
+    .sort((a, b) => recordTime(b) - recordTime(a));
+  if (!records.length) {
+    alert("出力する履歴がありません。");
+    return;
+  }
+  const names = [...new Set(records.map(record => String(record.siteName || "").trim()).filter(Boolean))];
+  const name = names.length === 1 ? groupName + "-" + names[0] : groupName;
+  downloadCsv(buildCsvRows(records), `fiber-loss-smgi-${safeFileName(name)}-${dateStamp()}.csv`);
+}
+
 function exportRecordCsv(id) {
   const record = loadRecords().find((item) => item.id === id);
   if (!record) return;
@@ -1107,7 +1132,7 @@ function downloadCsv(rows, filename) {
 }
 
 function downloadJsonBackup() {
-  const data = { app: "fiber-loss-smgi-wavecal-trial-fix15-auto-section-name", exportedAt: new Date().toISOString(), records: loadRecords() };
+  const data = { app: "fiber-loss-smgi-wavecal-trial-fix16-work-group-csv", exportedAt: new Date().toISOString(), records: loadRecords() };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
